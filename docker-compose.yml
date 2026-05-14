@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: attendance_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: attendance_system
+    networks:
+      - attendance_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: attendance_backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      MONGODB_URI: mongodb://mongodb:27017/attendance_system
+      JWT_SECRET: supersecretjwtkey_change_in_production
+      JWT_EXPIRE: 7d
+      ML_SERVICE_URL: http://ml-service:8000
+      FRONTEND_URL: http://localhost:5173
+      NODE_ENV: production
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-faceattend}
+      ADMIN_EMAIL: admin@school.edu
+      ADMIN_PASSWORD: Admin@123456
+      ADMIN_NAME: System Administrator
+      DEPARTMENT_ADMIN_PASSWORD: ${DEPARTMENT_ADMIN_PASSWORD:-Dept@123456}
+    volumes:
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      - mongodb
+    networks:
+      - attendance_net
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: attendance_ml
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      FACE_RECOGNITION_TOLERANCE: "0.42"
+      FACE_RECOGNITION_MODEL: large
+      LIVENESS_THRESHOLD: "0.60"
+      MIN_FACE_CONFIDENCE: "0.55"
+      PORT: 8000
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - attendance_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: attendance_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - attendance_net
+
+networks:
+  attendance_net:
+    driver: bridge
+
+volumes:
+  mongo_data:
