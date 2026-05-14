@@ -24,7 +24,7 @@ export const SocketProvider = ({ children }) => {
     // Don't re-connect if socket already exists for this user
     if (socketRef.current && socketRef.current.connected) return;
 
-    const s = io('/', {
+    const s = io(import.meta.env.VITE_SOCKET_URL || '/', {
       withCredentials: true,
       transports: ['polling', 'websocket'],
       upgrade: true,
