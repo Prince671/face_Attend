@@ -6,12 +6,12 @@ import { Camera, RefreshCw, ScanFace, X } from 'lucide-react';
 import { authAPI } from '../services/api';
 
 const AUTO_CAPTURE_READY_FRAMES = 2;
+const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
 const PASSPORT_WIDTH = 480;
 const PASSPORT_HEIGHT = 640;
 const CAPTURE_QUALITY = 0.78;
 const LIVENESS_FRAME_COUNT = 4;
 const LIVENESS_FRAME_INTERVAL_MS = 260;
-const FACE_DETECTION_INTERVAL_MS = 380;
 const CAMERA_CONSTRAINTS = {
   facingMode: 'user',
   width: { ideal: 640, max: 640 },
@@ -25,6 +25,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
   const autoCaptureFrames = useRef(0);
   const captureInProgress = useRef(false);
   const guideProbeInProgress = useRef(false);
+  const mlProbeBackoffUntil = useRef(0);
   const lastFaceBox = useRef(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
@@ -127,6 +128,9 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
   }, [getPassportCropFromVideo, sleep]);
 
   const probeGuideFaceWithML = useCallback(async () => {
+    if (Date.now() < mlProbeBackoffUntil.current) {
+      return { ready: false, message: 'Face service is warming up. Hold your face steady...' };
+    }
     if (guideProbeInProgress.current) return { pending: true, ready: false };
     const guideFrame = getPassportCropFromVideo();
     if (!guideFrame) return { ready: false, message: 'Camera frame is not ready yet' };
@@ -139,6 +143,9 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
       const response = await authAPI.detectRegistrationFace(formData);
       return response.data || { ready: false, message: 'Move your face into the oval' };
     } catch (err) {
+      if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
+        mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
+      }
       return {
         ready: false,
         message: err.response?.data?.message || 'Checking face position...'
@@ -238,6 +245,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
     const detector = FaceDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
     if (!detector) setStatus('Move your face inside the oval');
 
+    const detectionIntervalMs = detector ? 280 : 1800;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || captureInProgress.current) return;
@@ -315,7 +323,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
           submitFaceLogin();
         }
       }
-    }, FACE_DETECTION_INTERVAL_MS);
+    }, detectionIntervalMs);
 
     return () => {
       if (autoCaptureTimer.current) window.clearInterval(autoCaptureTimer.current);

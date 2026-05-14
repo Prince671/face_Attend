@@ -8,6 +8,7 @@ import AdminBreadcrumb from '../../components/AdminBreadcrumb';
 
 const STEPS = { CODE: 'code', CAMERA: 'camera', VERIFYING: 'verifying', SUCCESS: 'success', ERROR: 'error' };
 const AUTO_CAPTURE_READY_FRAMES = 2;
+const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
 const PASSPORT_WIDTH = 480;
 const PASSPORT_HEIGHT = 640;
 const CAPTURE_QUALITY = 0.78;
@@ -34,6 +35,7 @@ export default function MarkAttendance() {
   const lastFaceBox = useRef(null);
   const captureInProgress = useRef(false);
   const guideProbeInProgress = useRef(false);
+  const mlProbeBackoffUntil = useRef(0);
   const [step, setStep] = useState(STEPS.CODE);
   const [code, setCode] = useState('');
   const [lectureId, setLectureId] = useState('');
@@ -174,6 +176,9 @@ export default function MarkAttendance() {
   }, []);
 
   const probeGuideFaceWithML = useCallback(async () => {
+    if (Date.now() < mlProbeBackoffUntil.current) {
+      return { ready: false, message: 'Face service is warming up. Hold your face steady...' };
+    }
     if (guideProbeInProgress.current) return { pending: true, ready: false };
 
     const guideFrame = getPassportCropFromVideo();
@@ -187,6 +192,9 @@ export default function MarkAttendance() {
       const response = await attendanceAPI.detectGuideFace(formData);
       return response.data || { ready: false, message: 'Move your face into the oval' };
     } catch (err) {
+      if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
+        mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
+      }
       return {
         ready: false,
         message: err.response?.data?.message || 'Checking face position...'
@@ -281,6 +289,7 @@ export default function MarkAttendance() {
       setAutoCaptureStatus('Move your face inside the oval');
     }
 
+    const detectionIntervalMs = detector ? 300 : 1800;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || capturedImage || captureInProgress.current) return;
@@ -359,7 +368,7 @@ export default function MarkAttendance() {
           capture(true);
         }
       }
-    }, 650);
+    }, detectionIntervalMs);
 
     return () => {
       if (autoCaptureTimer.current) window.clearInterval(autoCaptureTimer.current);

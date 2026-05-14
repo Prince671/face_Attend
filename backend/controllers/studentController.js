@@ -36,28 +36,46 @@ const getDashboard = async (req, res) => {
       .sort({ markedAt: -1 })
       .limit(10);
 
-    // Per-subject stats
-    const subjectStats = await Promise.all(
-      student.enrolledSubjects.map(async (sub) => {
-        const completedLectures = await Lecture.find({ subject: sub._id, status: 'completed' }).select('_id');
-        const completedLectureIds = completedLectures.map(lecture => lecture._id);
-        const totalLectures = completedLectureIds.length;
-        const attended = await Attendance.countDocuments({
+    const completedCounts = await Lecture.aggregate([
+      { $match: { subject: { $in: subjectIds }, status: 'completed' } },
+      { $group: { _id: '$subject', totalLectures: { $sum: 1 } } }
+    ]);
+    const attendedCounts = await Attendance.aggregate([
+      {
+        $match: {
           student: req.user._id,
-          subject: sub._id,
-          lecture: { $in: completedLectureIds },
+          subject: { $in: subjectIds },
           status: 'present'
-        });
-        return {
-          subject: sub,
-          totalLectures,
-          attended,
-          percentage: totalLectures > 0
-            ? ((attended / totalLectures) * 100).toFixed(1)
-            : '0.0'
-        };
-      })
-    );
+        }
+      },
+      {
+        $lookup: {
+          from: 'lectures',
+          localField: 'lecture',
+          foreignField: '_id',
+          as: 'lectureDoc'
+        }
+      },
+      { $unwind: '$lectureDoc' },
+      { $match: { 'lectureDoc.status': 'completed' } },
+      { $group: { _id: '$subject', attended: { $sum: 1 } } }
+    ]);
+    const completedCountMap = new Map(completedCounts.map(item => [item._id.toString(), item.totalLectures]));
+    const attendedCountMap = new Map(attendedCounts.map(item => [item._id.toString(), item.attended]));
+
+    const subjectStats = student.enrolledSubjects.map((sub) => {
+      const key = sub._id.toString();
+      const totalLectures = completedCountMap.get(key) || 0;
+      const attended = attendedCountMap.get(key) || 0;
+      return {
+        subject: sub,
+        totalLectures,
+        attended,
+        percentage: totalLectures > 0
+          ? ((attended / totalLectures) * 100).toFixed(1)
+          : '0.0'
+      };
+    });
 
     // ✅ FIX: ALL lectures for enrolled subjects — not just open ones
     // Sorted newest first so student sees the latest scheduled lectures on dashboard
@@ -68,15 +86,25 @@ const getDashboard = async (req, res) => {
       .sort({ date: 1, startTime: 1, createdAt: 1 })
       .limit(20);
 
-    // Currently open attendance sessions
-    const openLectures = allLectures.filter(l => l.attendanceOpen === true);
+    // Currently open attendance sessions must not depend on the limited recent lecture list.
+    const openLectures = await Lecture.find({
+      subject: { $in: subjectIds },
+      attendanceOpen: true
+    })
+      .populate('subject', 'name code')
+      .sort({ date: 1, startTime: 1, createdAt: 1 });
 
     // Upcoming (scheduled) lectures — date >= today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const upcomingLectures = allLectures.filter(
-      l => l.status === 'scheduled' && new Date(l.date) >= today
-    );
+    const upcomingLectures = await Lecture.find({
+      subject: { $in: subjectIds },
+      status: 'scheduled',
+      date: { $gte: today }
+    })
+      .populate('subject', 'name code')
+      .sort({ date: 1, startTime: 1, createdAt: 1 })
+      .limit(20);
 
     res.json({
       success: true,

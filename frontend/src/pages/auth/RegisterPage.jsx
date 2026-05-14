@@ -9,6 +9,7 @@ import ThemeToggle from '../../components/ThemeToggle';
 
 const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const AUTO_CAPTURE_READY_FRAMES = 2;
+const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
 const PASSPORT_WIDTH = 480;
 const PASSPORT_HEIGHT = 640;
 const CAPTURE_QUALITY = 0.9;
@@ -25,6 +26,7 @@ export default function RegisterPage() {
   const autoCaptureFrames = useRef(0);
   const autoCaptureTimer = useRef(null);
   const guideProbeInProgress = useRef(false);
+  const mlProbeBackoffUntil = useRef(0);
   const captureInProgress = useRef(false);
   const lastFaceBox = useRef(null);
   const [form, setForm] = useState({
@@ -194,6 +196,9 @@ export default function RegisterPage() {
   }, [closeCamera, dataUrlToFile, getPassportCropFromVideo, setSelectedPhoto]);
 
   const probeGuideFaceWithML = useCallback(async () => {
+    if (Date.now() < mlProbeBackoffUntil.current) {
+      return { ready: false, message: 'Face service is warming up. Hold your face steady...' };
+    }
     if (guideProbeInProgress.current) return { pending: true, ready: false };
 
     const guideFrame = getPassportCropFromVideo();
@@ -207,6 +212,9 @@ export default function RegisterPage() {
       const response = await authAPI.detectRegistrationFace(formData);
       return response.data || { ready: false, message: 'Move your face into the oval' };
     } catch (err) {
+      if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
+        mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
+      }
       return {
         ready: false,
         message: err.response?.data?.message || 'Checking face position...'
@@ -241,6 +249,7 @@ export default function RegisterPage() {
       setAutoCaptureStatus('Move your face into the oval');
     }
 
+    const detectionIntervalMs = detector ? 300 : 1800;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || photoPreview || captureInProgress.current) return;
@@ -320,7 +329,7 @@ export default function RegisterPage() {
           capturePhoto(true);
         }
       }
-    }, 650);
+    }, detectionIntervalMs);
 
     return () => {
       if (autoCaptureTimer.current) window.clearInterval(autoCaptureTimer.current);

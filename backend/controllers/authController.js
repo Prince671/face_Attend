@@ -418,7 +418,10 @@ const beginBiometricRegistration = async (req, res) => {
           name: user.email,
           displayName: user.name
         },
-        pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+        pubKeyCredParams: [
+          { type: 'public-key', alg: -7 },
+          { type: 'public-key', alg: -257 }
+        ],
         timeout: 60000,
         attestation: 'none',
         authenticatorSelection: {

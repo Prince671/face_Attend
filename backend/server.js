@@ -31,9 +31,23 @@ server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000);
 server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 66000);
 server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS || 120000);
 
+const configuredFrontendOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set([
+  ...configuredFrontendOrigins,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+]);
+const corsOrigin = (origin, callback) => {
+  if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+  return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+};
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -44,7 +58,7 @@ connectDB();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: corsOrigin,
   credentials: true
 }));
 
