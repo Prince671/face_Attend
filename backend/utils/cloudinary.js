@@ -27,10 +27,11 @@ const signParams = (params, apiSecret) => {
   return crypto.createHash('sha1').update(`${payload}${apiSecret}`).digest('hex');
 };
 
-const uploadImage = async (filePath, options = {}) => {
+const uploadFile = async (filePath, options = {}) => {
   const { cloudName, apiKey, apiSecret } = getConfig();
   const timestamp = Math.floor(Date.now() / 1000);
-  const folder = options.folder || process.env.CLOUDINARY_FOLDER || 'faceattend';
+  const folder = options.folder || process.env.CLOUDINARY_FOLDER || 'studysphere';
+  const resourceType = options.resourceType || 'image';
   const params = {
     timestamp,
     folder,
@@ -45,7 +46,7 @@ const uploadImage = async (filePath, options = {}) => {
   if (options.publicId) form.append('public_id', options.publicId);
   form.append('signature', signParams(params, apiSecret));
 
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`, {
     method: 'POST',
     body: form,
     headers: form.getHeaders(),
@@ -60,6 +61,7 @@ const uploadImage = async (filePath, options = {}) => {
   return {
     url: data.secure_url,
     publicId: data.public_id,
+    resourceType,
     width: data.width,
     height: data.height,
     format: data.format,
@@ -67,11 +69,14 @@ const uploadImage = async (filePath, options = {}) => {
   };
 };
 
+const uploadImage = (filePath, options = {}) => uploadFile(filePath, { ...options, resourceType: options.resourceType || 'image' });
+
 const deleteImage = async (publicId, options = {}) => {
   if (!publicId) return { deleted: false, reason: 'Missing Cloudinary public id' };
 
   const { cloudName, apiKey, apiSecret } = getConfig();
   const timestamp = Math.floor(Date.now() / 1000);
+  const resourceType = options.resourceType || 'image';
   const params = { public_id: publicId, timestamp };
 
   const form = new FormData();
@@ -80,7 +85,7 @@ const deleteImage = async (publicId, options = {}) => {
   form.append('timestamp', timestamp);
   form.append('signature', signParams(params, apiSecret));
 
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`, {
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, {
     method: 'POST',
     body: form,
     headers: form.getHeaders(),
@@ -114,6 +119,7 @@ const downloadImage = async (imageUrl, prefix = 'cloudinary-image') => {
 };
 
 module.exports = {
+  uploadFile,
   uploadImage,
   deleteImage,
   downloadImage,

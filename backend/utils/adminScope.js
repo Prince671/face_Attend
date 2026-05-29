@@ -13,7 +13,19 @@ const getAdminDepartment = (user) => {
 };
 
 const getAdminSemesterScope = (user) => {
-  if (!getAdminDepartment(user)) return null;
+  return null;
+};
+
+const getTeacherDepartments = (user) => {
+  if (!user || user.role !== 'teacher') return [];
+  const values = Array.isArray(user.departments) && user.departments.length
+    ? user.departments
+    : [user.department];
+  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+};
+
+const getTeacherSemesterScope = (user) => {
+  if (!user || user.role !== 'teacher') return null;
   const semester = Number(user.adminSemesterScope);
   return semester >= 1 && semester <= 8 ? semester : null;
 };
@@ -46,6 +58,8 @@ module.exports = {
   isSystemAdmin,
   getAdminDepartment,
   getAdminSemesterScope,
+  getTeacherDepartments,
+  getTeacherSemesterScope,
   applyDepartmentScope,
   applyAcademicScope,
   assertDepartmentAccess,

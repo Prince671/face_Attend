@@ -39,6 +39,16 @@ const adminOnly = (req, res, next) => {
   return res.status(403).json({ success: false, message: 'Access denied: Admins only' });
 };
 
+const teacherOnly = (req, res, next) => {
+  if (req.user && req.user.role === 'teacher') return next();
+  return res.status(403).json({ success: false, message: 'Access denied: Teachers only' });
+};
+
+const adminOrTeacher = (req, res, next) => {
+  if (req.user && ['admin', 'teacher'].includes(req.user.role)) return next();
+  return res.status(403).json({ success: false, message: 'Access denied: Staff only' });
+};
+
 const studentOnly = (req, res, next) => {
   if (req.user && req.user.role === 'student') return next();
   return res.status(403).json({ success: false, message: 'Access denied: Students only' });
@@ -48,4 +58,4 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '7d' });
 };
 
-module.exports = { protect, adminOnly, studentOnly, generateToken };
+module.exports = { protect, adminOnly, teacherOnly, adminOrTeacher, studentOnly, generateToken };

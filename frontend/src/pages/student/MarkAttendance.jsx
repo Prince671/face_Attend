@@ -1,19 +1,22 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import Webcam from 'react-webcam';
 import toast from 'react-hot-toast';
-import { Camera, CheckCircle, XCircle, AlertCircle, RefreshCw, Send, Lock } from 'lucide-react';
+import { BookOpen, Camera, CheckCircle, XCircle, AlertCircle, RefreshCw, Send, Lock } from 'lucide-react';
 import { attendanceAPI, studentAPI, subjectAPI } from '../../services/api';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
+import { useSocket } from '../../context/SocketContext';
+import { SkeletonLine } from '../../components/LoadingStates';
 
 const STEPS = { CODE: 'code', CAMERA: 'camera', VERIFYING: 'verifying', SUCCESS: 'success', ERROR: 'error' };
-const AUTO_CAPTURE_READY_FRAMES = 2;
+const AUTO_CAPTURE_READY_FRAMES = 1;
 const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
-const PASSPORT_WIDTH = 480;
-const PASSPORT_HEIGHT = 640;
-const CAPTURE_QUALITY = 0.78;
-const LIVENESS_FRAME_COUNT = 4;
-const LIVENESS_FRAME_INTERVAL_MS = 260;
+const PASSPORT_WIDTH = 360;
+const PASSPORT_HEIGHT = 480;
+const CAPTURE_QUALITY = 0.72;
+const LIVENESS_FRAME_COUNT = 3;
+const LIVENESS_FRAME_INTERVAL_MS = 140;
 const CAMERA_CONSTRAINTS = {
   facingMode: 'user',
   width: { ideal: 640, max: 640 },
@@ -28,6 +31,7 @@ const sortLecturesByDateAsc = (items = []) => [...items].sort((a, b) => {
 });
 
 export default function MarkAttendance() {
+  const { socket } = useSocket();
   const webcamRef = useRef(null);
   const autoCaptureFrames = useRef(0);
   const autoCaptureTimer = useRef(null);
@@ -52,13 +56,32 @@ export default function MarkAttendance() {
   const [autoCaptureReady, setAutoCaptureReady] = useState(false);
   const [autoCaptureAvailable, setAutoCaptureAvailable] = useState(true);
   const [autoSubmitAfterCapture, setAutoSubmitAfterCapture] = useState(false);
+  const [codePromptOpen, setCodePromptOpen] = useState(false);
 
-  useEffect(() => {
+  const refreshAttendanceContext = useCallback(() => {
     studentAPI.getDashboard().then(r => {
       setOpenLectures(sortLecturesByDateAsc(r.data.openLectures || []));
     }).catch(() => {});
     subjectAPI.getMine().then(r => setSubjects(r.data.subjects)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshAttendanceContext();
+  }, [refreshAttendanceContext]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    socket.on('attendance_opened', refreshAttendanceContext);
+    socket.on('attendance_closed', refreshAttendanceContext);
+    socket.on('lectures_changed', refreshAttendanceContext);
+    socket.on('subject_updated', refreshAttendanceContext);
+    return () => {
+      socket.off('attendance_opened', refreshAttendanceContext);
+      socket.off('attendance_closed', refreshAttendanceContext);
+      socket.off('lectures_changed', refreshAttendanceContext);
+      socket.off('subject_updated', refreshAttendanceContext);
+    };
+  }, [socket, refreshAttendanceContext]);
 
   const clampCrop = useCallback((crop, width, height) => {
     const next = { ...crop };
@@ -289,7 +312,7 @@ export default function MarkAttendance() {
       setAutoCaptureStatus('Move your face inside the oval');
     }
 
-    const detectionIntervalMs = detector ? 300 : 1800;
+    const detectionIntervalMs = detector ? 180 : 1400;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || capturedImage || captureInProgress.current) return;
@@ -380,6 +403,7 @@ export default function MarkAttendance() {
     e.preventDefault();
     if (code.length !== 6) { toast.error('Enter a valid 6-digit code'); return; }
     if (!lectureId) { toast.error('Please select a lecture or enter a lecture'); return; }
+    setCodePromptOpen(false);
     setCameraReady(false);
     setCameraError('');
     setCameraRequestKey(key => key + 1);
@@ -439,6 +463,7 @@ export default function MarkAttendance() {
     setCameraReady(false);
     setCameraError('');
     setSelectedLecture(null);
+    setCodePromptOpen(false);
     autoCaptureFrames.current = 0;
     setAutoCaptureReady(false);
     setAutoCaptureStatus('Align your face inside the oval');
@@ -446,30 +471,85 @@ export default function MarkAttendance() {
     lastFaceBox.current = null;
   };
 
+  const openLectureBySubject = new Map(openLectures.map(lecture => [String(lecture.subject?._id || lecture.subject), lecture]));
+  const openSubjectCards = subjects
+    .map(subject => ({ subject, lecture: openLectureBySubject.get(String(subject._id)) }))
+    .filter(item => Boolean(item.lecture));
+
+  const selectSubjectCard = (subject) => {
+    const lecture = openLectureBySubject.get(String(subject._id));
+    if (!lecture) {
+      toast('Attendance is not open for this subject yet.');
+      return;
+    }
+    setSelectedLecture(lecture);
+    setLectureId(lecture._id);
+    setCode('');
+    setCodePromptOpen(true);
+  };
+
   return (
-    <div className="space-y-5 sm:space-y-6 max-w-2xl mx-auto">
+    <div className="space-y-5 sm:space-y-6">
       <div>
         <h1 className="font-display text-2xl font-bold text-white">Mark Attendance</h1>
-        <p className="text-slate-400 mt-1">Use your face and the session code to mark attendance</p>
+        <p className="text-slate-400 mt-1">Choose the subject whose attendance is currently open</p>
       </div>
 
       <AdminBreadcrumb items={[
-        { label: 'Student Portal' },
+        { label: 'StudySphere' },
         { label: 'Attendance' },
         selectedLecture?.subject?.name && { label: selectedLecture.subject.name }
       ]} />
 
-      {/* Open lectures quick select */}
-      {openLectures.length > 0 && step === STEPS.CODE && (
+      {step === STEPS.CODE && (
+        <div className="glass-card">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="flex items-center gap-2 font-semibold text-white">
+                <BookOpen className="h-5 w-5 text-primary-300" /> Your Subjects
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">Only subjects with open attendance are shown here.</p>
+            </div>
+            <span className="badge-info w-fit">{openLectures.length} open</span>
+          </div>
+
+          <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+            {openSubjectCards.map(({ subject }) => {
+              return (
+                <motion.button
+                  key={subject._id}
+                  type="button"
+                  onClick={() => selectSubjectCard(subject)}
+                  whileTap={{ scale: 0.96 }}
+                  whileHover={{ y: -4 }}
+                  className="group relative mx-auto flex aspect-square w-full max-w-[118px] flex-col items-center justify-center rounded-full border border-emerald-300/70 bg-emerald-500/15 p-3 text-center shadow-[0_0_26px_rgba(16,185,129,0.28)] transition-all"
+                >
+                  <span className="absolute inset-0 rounded-full border border-emerald-300/60 animate-ping" />
+                  <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.9)]" />
+                  <BookOpen className="mb-2 h-5 w-5 text-emerald-200" />
+                  <span className="line-clamp-2 text-[11px] font-semibold text-white sm:text-xs">{subject.name}</span>
+                  <span className="mt-1 max-w-full truncate text-[10px] text-emerald-200">{subject.code}</span>
+                </motion.button>
+              );
+            })}
+          </div>
+
+          {openSubjectCards.length === 0 && (
+            <div className="py-10 text-center text-sm text-slate-500">No attendance is open right now.</div>
+          )}
+        </div>
+      )}
+
+      {false && openLectures.length > 0 && step === STEPS.CODE && (
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4">
           <p className="text-emerald-400 font-medium mb-2 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             Open Attendance Sessions
           </p>
-          <div className="space-y-2">
+          <div className="card-strip lg:block lg:space-y-2">
             {openLectures.map(lec => (
               <button key={lec._id} onClick={() => { setLectureId(lec._id); setSelectedLecture(lec); }}
-                className={`w-full text-left p-3 rounded-xl border transition-all ${lectureId === lec._id ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
+                className={`text-left p-3 rounded-xl border transition-all lg:w-full ${lectureId === lec._id ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
                 <p className="font-medium text-white text-sm">{lec.title}</p>
                 <p className="text-slate-400 text-xs">{lec.subject?.name} · {lec.subject?.code}</p>
               </button>
@@ -478,7 +558,7 @@ export default function MarkAttendance() {
         </div>
       )}
 
-      <div className="glass-card">
+      <div className={step === STEPS.CODE ? 'hidden' : 'glass-card max-w-2xl mx-auto'}>
         <AnimatePresence mode="wait">
           {/* STEP 1: Enter Code */}
           {step === STEPS.CODE && (
@@ -505,7 +585,7 @@ export default function MarkAttendance() {
                 <div>
                   <label className="label">6-Digit Attendance Code *</label>
                   <input
-                    className="input-field text-center text-2xl sm:text-3xl font-mono tracking-[0.35em] sm:tracking-[0.5em] font-bold"
+                    className="input-field text-center text-xl sm:text-3xl font-mono tracking-[0.2em] sm:tracking-[0.5em] font-bold"
                     placeholder="______"
                     maxLength={6}
                     value={code}
@@ -559,7 +639,7 @@ export default function MarkAttendance() {
                     )}
                     {!cameraReady && !cameraError && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-                        <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                        <SkeletonLine className="h-8 w-8 rounded-full" />
                       </div>
                     )}
                     {cameraError && (
@@ -623,13 +703,13 @@ export default function MarkAttendance() {
           {/* STEP 3: Verifying */}
           {step === STEPS.VERIFYING && (
             <motion.div key="verifying" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-10">
-              <div className="w-20 h-20 rounded-full border-4 border-primary-500/30 border-t-primary-500 animate-spin mx-auto mb-4" />
+              <SkeletonLine className="mx-auto mb-4 h-20 w-20 rounded-full" />
               <h2 className="font-semibold text-white text-xl">Verifying Identity</h2>
               <p className="text-slate-400 mt-2">Running face recognition analysis...</p>
-              <div className="mt-4 space-y-2 text-sm text-slate-500">
-                <p>🔍 Detecting face features...</p>
-                <p>🧠 Comparing with registered profile...</p>
-                <p>🛡️ Running liveness detection...</p>
+              <div className="mx-auto mt-5 max-w-xs space-y-2">
+                <SkeletonLine className="h-3 w-full" />
+                <SkeletonLine className="mx-auto h-3 w-5/6" />
+                <SkeletonLine className="mx-auto h-3 w-4/6" />
               </div>
             </motion.div>
           )}
@@ -680,6 +760,45 @@ export default function MarkAttendance() {
           )}
         </AnimatePresence>
       </div>
+
+      {typeof document !== 'undefined' && createPortal(
+      <AnimatePresence>
+        {codePromptOpen && selectedLecture && step === STEPS.CODE && (
+          <div className="app-modal-backdrop">
+            <motion.form
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              onSubmit={handleCodeSubmit}
+              className="glass-card w-full max-w-md"
+            >
+              <h2 className="mb-1 flex items-center gap-2 font-semibold text-white">
+                <Lock className="h-5 w-5 text-emerald-300" /> Enter Attendance Code
+              </h2>
+              <p className="text-sm text-slate-400">{selectedLecture.subject?.name} - {selectedLecture.title}</p>
+              <div className="mt-4">
+                <label className="label">6-Digit Attendance Code *</label>
+                <input
+                  autoFocus
+                  className="input-field text-center text-2xl font-bold font-mono tracking-[0.38em]"
+                  placeholder="______"
+                  maxLength={6}
+                  value={code}
+                  onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  required
+                />
+                <p className="mt-1 text-xs text-slate-500">Ask your teacher for the attendance code.</p>
+              </div>
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <button type="button" onClick={() => { setCodePromptOpen(false); setSelectedLecture(null); setLectureId(''); }} className="btn-secondary flex-1">Cancel</button>
+                <button type="submit" disabled={code.length !== 6 || !lectureId} className="btn-primary flex-1">Verify Face</button>
+              </div>
+            </motion.form>
+          </div>
+        )}
+      </AnimatePresence>,
+      document.body
+      )}
     </div>
   );
 }

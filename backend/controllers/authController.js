@@ -1,10 +1,12 @@
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const OtpVerification = require('../models/OtpVerification');
+const AuditLog = require('../models/AuditLog');
 const { generateToken } = require('../middleware/authMiddleware');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
-const { uploadImage, downloadImage, isRemoteImage } = require('../utils/cloudinary');
+const { uploadImage, downloadImage, isRemoteImage, deleteImage } = require('../utils/cloudinary');
 const { SYSTEM_ADMIN_DEPARTMENT, adminDepartmentRoom, getAdminDepartment } = require('../utils/adminScope');
 const {
   base64url,
@@ -15,6 +17,19 @@ const {
   verifyClientData,
   verifyAssertion
 } = require('../utils/webauthn');
+const { validateStrongPassword } = require('../utils/passwordPolicy');
+const {
+  compareValue,
+  generateOtp,
+  generateSecureToken,
+  hashValue,
+  normalizeEmail,
+  otpTtlMinutes,
+  sendEmailOtp
+} = require('../utils/otpService');
+const { enrollStudentInMatchingSubjects } = require('../utils/subjectEnrollment');
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const safeUserPayload = (user) => ({
   _id: user._id,
@@ -23,7 +38,10 @@ const safeUserPayload = (user) => ({
   role: user.role,
   status: user.status,
   studentId: user.studentId,
+  course: user.course,
   department: user.department,
+  departments: user.departments,
+  branch: user.branch,
   semester: user.semester,
   adminAcademicYear: user.adminAcademicYear,
   adminSemesterScope: user.adminSemesterScope,
@@ -33,6 +51,8 @@ const safeUserPayload = (user) => ({
   phone: user.phone,
   address: user.address,
   profileImage: user.profileImage,
+  semesterUpdatedAt: user.semesterUpdatedAt,
+  pendingProfileUpdate: user.pendingProfileUpdate,
   isRestricted: user.isRestricted,
   enrolledSubjects: user.enrolledSubjects,
   hasBiometric: Boolean(user.biometricCredential?.credentialId),
@@ -44,6 +64,56 @@ const cleanupFiles = (paths = []) => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     } catch (_) {}
   });
+};
+
+const parseDateOnlyAsLocalDay = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return new Date(raw);
+};
+
+const toLocalDateValue = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const COURSE_BRANCH_DEPARTMENT = {
+  'Computer Science': 'Computer Science',
+  'Mechanical Engineering': 'Mechanical',
+  'Electrical Engineering': 'Electrical',
+  'AI/ML Engineering': 'Computer Science',
+  BBA: 'BBA',
+  MBA: 'MBA'
+};
+
+const normalizeCourse = (value) => {
+  const course = String(value || '').trim();
+  if (/^b\.?\s*tech$/i.test(course)) return 'B. Tech';
+  if (/^diploma$/i.test(course)) return 'Diploma';
+  if (/^bba$/i.test(course)) return 'BBA';
+  if (/^mba$/i.test(course)) return 'MBA';
+  return course;
+};
+
+const academicDepartmentFor = (courseValue, branchValue, fallbackDepartment) => {
+  const course = normalizeCourse(courseValue);
+  const branch = String(branchValue || '').trim();
+  if (course === 'BBA' || course === 'MBA') return course;
+  return COURSE_BRANCH_DEPARTMENT[branch] || fallbackDepartment || branch;
+};
+
+const normalizeStudentBranch = (department, branch, courseValue) => {
+  const course = normalizeCourse(courseValue);
+  const value = String(branch || '').trim();
+  if (course === 'Diploma' && /computer/i.test(value)) return 'Diploma CS';
+  if (course === 'BBA' || course === 'MBA') return '';
+  if (value) return value;
+  return /computer|cse|cs/i.test(String(department || '')) ? 'Computer Science' : '';
 };
 
 const validateImageForEncoding = async (imagePath, filename = 'registration_face.jpg', timeout = 30000) => {
@@ -58,20 +128,37 @@ const validateImageForEncoding = async (imagePath, filename = 'registration_face
   return mlRes.json();
 };
 
+const compareFaceEncodings = (known = [], next = []) => {
+  if (!Array.isArray(known) || !Array.isArray(next) || !known.length || known.length !== next.length) {
+    return { match: false, confidence: 0 };
+  }
+  let dot = 0;
+  let knownNorm = 0;
+  let nextNorm = 0;
+  for (let index = 0; index < known.length; index += 1) {
+    const a = Number(known[index]);
+    const b = Number(next[index]);
+    dot += a * b;
+    knownNorm += a * a;
+    nextNorm += b * b;
+  }
+  const similarity = dot / ((Math.sqrt(knownNorm) * Math.sqrt(nextNorm)) || 1);
+  const confidence = Math.max(0, Math.min(100, Math.round(((similarity + 1) / 2) * 1000) / 10));
+  return { match: similarity >= 0.42, confidence, similarity };
+};
+
 const ensureFaceLoginEncoding = async (student) => {
   if (Array.isArray(student.faceEncoding) && student.faceEncoding.length > 0) {
     return true;
   }
 
   const source = student.faceImagePath || student.profileImage;
-  if (!source) return false;
+  if (!source || !isRemoteImage(source)) return false;
 
   let tempFile = null;
   try {
-    const imagePath = isRemoteImage(source)
-      ? await downloadImage(source, `face_login_profile_${student._id}`)
-      : source;
-    tempFile = isRemoteImage(source) ? imagePath : null;
+    const imagePath = await downloadImage(source, `face_login_profile_${student._id}`);
+    tempFile = imagePath;
     const validation = await validateImageForEncoding(imagePath, `profile_${student._id}.jpg`, 60000);
     if (!validation.valid || !Array.isArray(validation.encoding) || validation.encoding.length === 0) {
       return false;
@@ -124,17 +211,289 @@ const detectRegistrationFace = async (req, res) => {
   }
 };
 
+const latestActiveOtp = (query) => OtpVerification.findOne({
+  ...query,
+  consumedAt: { $exists: false },
+  expiresAt: { $gt: new Date() }
+}).sort({ createdAt: -1 });
+
+const sendRegistrationOtp = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const existingUser = await User.findOne({ email }).select('_id');
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: 'Email already registered.' });
+    }
+
+    const emailOtp = generateOtp();
+    const expiresAt = new Date(Date.now() + otpTtlMinutes() * 60 * 1000);
+
+    await OtpVerification.updateMany(
+      { purpose: 'student_registration', email, consumedAt: { $exists: false } },
+      { consumedAt: new Date() }
+    );
+
+    const emailOtpHash = await hashValue(emailOtp);
+    await OtpVerification.create({
+      purpose: 'student_registration',
+      email,
+      emailOtpHash,
+      expiresAt
+    });
+
+    await sendEmailOtp({ to: email, otp: emailOtp, purpose: 'student_registration' });
+
+    return res.json({
+      success: true,
+      message: `Email OTP sent to ${email}.`,
+      expiresAt
+    });
+  } catch (err) {
+    console.error('sendRegistrationOtp error:', err);
+    return res.status(503).json({ success: false, message: err.message || 'Could not send OTP.' });
+  }
+};
+
+const verifyRegistrationOtp = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const emailOtp = String(req.body.emailOtp || '').trim();
+
+    if (!email || !emailOtp) {
+      return res.status(400).json({ success: false, message: 'Email and OTP are required.' });
+    }
+
+    const record = await latestActiveOtp({ purpose: 'student_registration', email });
+    if (!record) {
+      return res.status(400).json({ success: false, message: 'OTP session expired. Send OTP again.' });
+    }
+    if (record.attempts >= 5) {
+      record.consumedAt = new Date();
+      await record.save();
+      return res.status(429).json({ success: false, message: 'Too many invalid OTP attempts. Send a new OTP.' });
+    }
+
+    const emailOk = await compareValue(emailOtp, record.emailOtpHash);
+
+    if (!emailOk) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ success: false, message: 'Invalid email OTP.' });
+    }
+
+    record.emailVerified = true;
+    record.verifiedAt = new Date();
+    await record.save();
+
+    return res.json({ success: true, message: 'Email verified. Continue registration.' });
+  } catch (err) {
+    console.error('verifyRegistrationOtp error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Could not verify OTP.' });
+  }
+};
+
+const sendProfileEmailOtp = async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Student access required.' });
+    }
+    const email = normalizeEmail(req.body.email);
+    if (!email) return res.status(400).json({ success: false, message: 'New email is required.' });
+    if (email === req.user.email) return res.status(400).json({ success: false, message: 'Enter a different email address.' });
+
+    const existing = await User.findOne({ email, _id: { $ne: req.user._id }, pendingDeletion: { $ne: true } }).select('_id');
+    if (existing) return res.status(409).json({ success: false, message: 'Email is already in use.' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + otpTtlMinutes() * 60 * 1000);
+    await OtpVerification.updateMany(
+      { purpose: 'student_email_update', email, consumedAt: { $exists: false } },
+      { consumedAt: new Date() }
+    );
+    await OtpVerification.create({
+      purpose: 'student_email_update',
+      email,
+      emailOtpHash: await hashValue(otp),
+      expiresAt
+    });
+
+    await sendEmailOtp({ to: email, otp, purpose: 'student_email_update' });
+    return res.json({ success: true, message: `OTP sent to ${email}.`, expiresAt });
+  } catch (err) {
+    console.error('sendProfileEmailOtp error:', err);
+    return res.status(503).json({ success: false, message: err.message || 'Could not send OTP.' });
+  }
+};
+
+const verifyProfileEmailOtp = async (req, res) => {
+  try {
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Student access required.' });
+    }
+    const email = normalizeEmail(req.body.email);
+    const otp = String(req.body.otp || '').trim();
+    if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP are required.' });
+
+    const record = await latestActiveOtp({ purpose: 'student_email_update', email });
+    if (!record) return res.status(400).json({ success: false, message: 'OTP session expired. Send OTP again.' });
+    if (record.attempts >= 5) {
+      record.consumedAt = new Date();
+      await record.save();
+      return res.status(429).json({ success: false, message: 'Too many invalid OTP attempts. Send a new OTP.' });
+    }
+
+    const ok = await compareValue(otp, record.emailOtpHash);
+    if (!ok) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+    }
+
+    record.emailVerified = true;
+    record.verifiedAt = new Date();
+    await record.save();
+    return res.json({ success: true, message: 'Email verified. Submit your profile request.' });
+  } catch (err) {
+    console.error('verifyProfileEmailOtp error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Could not verify OTP.' });
+  }
+};
+
+const sendForgotPasswordOtp = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    if (!email) return res.status(400).json({ success: false, message: 'Registered email is required.' });
+
+    const user = await User.findOne({ email, pendingDeletion: { $ne: true } }).select('_id email status');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+    }
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + otpTtlMinutes() * 60 * 1000);
+    await OtpVerification.updateMany(
+      { purpose: 'forgot_password', email, consumedAt: { $exists: false } },
+      { consumedAt: new Date() }
+    );
+    await OtpVerification.create({
+      purpose: 'forgot_password',
+      email,
+      emailOtpHash: await hashValue(otp),
+      expiresAt
+    });
+
+    await sendEmailOtp({ to: email, otp, purpose: 'forgot_password' });
+    return res.json({ success: true, message: `Password reset OTP sent to ${email}.`, expiresAt });
+  } catch (err) {
+    console.error('sendForgotPasswordOtp error:', err);
+    return res.status(503).json({ success: false, message: err.message || 'Could not send reset OTP.' });
+  }
+};
+
+const verifyForgotPasswordOtp = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const otp = String(req.body.otp || '').trim();
+    if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP are required.' });
+
+    const record = await latestActiveOtp({ purpose: 'forgot_password', email });
+    if (!record) return res.status(400).json({ success: false, message: 'OTP session expired. Send OTP again.' });
+    if (record.attempts >= 5) {
+      record.consumedAt = new Date();
+      await record.save();
+      return res.status(429).json({ success: false, message: 'Too many invalid OTP attempts. Send a new OTP.' });
+    }
+
+    const ok = await compareValue(otp, record.emailOtpHash);
+    if (!ok) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+    }
+
+    const resetToken = generateSecureToken();
+    record.emailVerified = true;
+    record.verifiedAt = new Date();
+    record.resetTokenHash = await hashValue(resetToken);
+    await record.save();
+
+    return res.json({ success: true, resetToken, message: 'OTP verified. Set your new password.' });
+  } catch (err) {
+    console.error('verifyForgotPasswordOtp error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Could not verify reset OTP.' });
+  }
+};
+
+const resetForgotPassword = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const resetToken = String(req.body.resetToken || '').trim();
+    const password = String(req.body.password || '');
+    const policy = validateStrongPassword(password);
+    if (!policy.valid) return res.status(400).json({ success: false, message: policy.message });
+    if (!email || !resetToken) return res.status(400).json({ success: false, message: 'Reset session is missing.' });
+
+    const record = await latestActiveOtp({ purpose: 'forgot_password', email, emailVerified: true });
+    if (!record || !(await compareValue(resetToken, record.resetTokenHash))) {
+      return res.status(400).json({ success: false, message: 'Reset session expired. Verify OTP again.' });
+    }
+
+    const user = await User.findOne({ email, pendingDeletion: { $ne: true } }).select('+password');
+    if (!user) return res.status(404).json({ success: false, message: 'Account not found.' });
+
+    user.password = password;
+    await user.save();
+    record.consumedAt = new Date();
+    await record.save();
+
+    return res.json({ success: true, message: 'Password reset successfully. Please sign in.' });
+  } catch (err) {
+    console.error('resetForgotPassword error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Could not reset password.' });
+  }
+};
+
 // @desc    Register new student
 const register = async (req, res) => {
   let cloudinaryUpload = null;
   try {
-    const { name, email, password, studentId, department, semester, phone, address, fatherName, dateOfBirth } = req.body;
+    const { name, email, password, studentId, course: rawCourse, department: rawDepartment, branch, semester, phone, address, fatherName, dateOfBirth } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedPhone = String(phone || '').replace(/\s+/g, '').trim();
+    const course = normalizeCourse(rawCourse);
+    const department = academicDepartmentFor(course, branch, rawDepartment);
+    const policy = validateStrongPassword(password);
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Profile image (passport photo) is required' });
     }
 
-    const existingUser = await User.findOne({ $or: [{ email }, { studentId }] });
+    if (!policy.valid) {
+      cleanupFiles([req.file?.path]);
+      return res.status(400).json({ success: false, message: policy.message });
+    }
+
+    if (!course || !department || !semester) {
+      cleanupFiles([req.file?.path]);
+      return res.status(400).json({ success: false, message: 'Course, branch/department, and semester are required' });
+    }
+
+    const otpRecord = await latestActiveOtp({
+      purpose: 'student_registration',
+      email: normalizedEmail,
+      emailVerified: true
+    });
+    if (!otpRecord) {
+      cleanupFiles([req.file?.path]);
+      return res.status(400).json({ success: false, message: 'Verify your email OTP before submitting registration.' });
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email: normalizedEmail }, { studentId }] });
     if (existingUser) {
       try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({ success: false, message: 'Email or Student ID already registered' });
@@ -163,7 +522,7 @@ const register = async (req, res) => {
 
     try {
       cloudinaryUpload = await uploadImage(req.file.path, {
-        folder: `${process.env.CLOUDINARY_FOLDER || 'faceattend'}/profiles`,
+        folder: `${process.env.CLOUDINARY_FOLDER || 'studysphere'}/profiles`,
         publicId: `student_${studentId}_${Date.now()}`
       });
     } catch (err) {
@@ -180,14 +539,16 @@ const register = async (req, res) => {
 
     const user = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       password,
       studentId,
+      course,
       department,
+      branch: normalizeStudentBranch(department, branch, course),
       semester: parseInt(semester),
       fatherName,
       dateOfBirth: dateOfBirth || undefined,
-      phone,
+      phone: normalizedPhone,
       address,
       profileImage: cloudinaryUpload.url,
       profileImagePublicId: cloudinaryUpload.publicId,
@@ -196,6 +557,33 @@ const register = async (req, res) => {
       status: 'pending',
       role: 'student'
     });
+
+    try {
+      await AuditLog.create({
+        actor: user._id,
+        actorName: user.name,
+        actorEmail: user.email,
+        actorDepartment: user.department,
+        action: 'student.registration_requested',
+        entityType: 'student',
+        entityId: user._id,
+        entityName: `${user.name} (${user.studentId})`,
+        targetDepartment: user.department,
+        details: {
+          course: user.course,
+          branch: user.branch,
+          semester: user.semester,
+          requestedAt: user.createdAt
+        },
+        ipAddress: req.ip,
+        userAgent: req.get?.('user-agent')
+      });
+    } catch (auditErr) {
+      console.error('registration audit log error:', auditErr.message);
+    }
+
+    otpRecord.consumedAt = new Date();
+    await otpRecord.save();
 
     cleanupFiles([req.file.path]);
 
@@ -254,13 +642,25 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required' });
+    const identifier = String(email || '').trim();
+    if (!identifier || !password) {
+      return res.status(400).json({ success: false, message: 'Email/Student ID and password are required' });
     }
 
-    const user = await User.findOne({ email }).select('+password');
+    const normalizedEmail = identifier.toLowerCase();
+    const loginQuery = identifier.includes('@')
+      ? { email: normalizedEmail, pendingDeletion: { $ne: true } }
+      : {
+        pendingDeletion: { $ne: true },
+        $or: [
+          { email: normalizedEmail },
+          { role: 'student', studentId: { $regex: `^${escapeRegex(identifier)}$`, $options: 'i' } }
+        ]
+      };
+
+    const user = await User.findOne(loginQuery).select('+password');
     if (!user || !(await user.matchPassword(password))) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email/student ID or password' });
     }
     if (user.pendingDeletion) {
       return res.status(403).json({ success: false, message: 'Your account is scheduled for deletion. Contact admin immediately if this is a mistake.' });
@@ -282,7 +682,7 @@ const login = async (req, res) => {
       success: true,
       token,
       user: safeUserPayload(user),
-      requiresAdminScope: Boolean(getAdminDepartment(user))
+      requiresAdminScope: user.role === 'teacher'
     });
   } catch (err) {
     console.error('login error:', err);
@@ -307,18 +707,16 @@ const faceLogin = async (req, res) => {
     const students = await User.find({
       role: 'student',
       status: { $nin: ['pending', 'inactive'] },
-      pendingDeletion: { $ne: true }
-    }).select('_id faceEncoding profileImage faceImagePath');
+      pendingDeletion: { $ne: true },
+      faceEncoding: { $exists: true, $ne: [] }
+    }).select('_id faceEncoding').lean();
 
-    const candidates = [];
-    for (const student of students) {
-      const ready = await ensureFaceLoginEncoding(student);
-      if (!ready) continue;
-      candidates.push({
+    const candidates = students
+      .filter(student => Array.isArray(student.faceEncoding) && student.faceEncoding.length > 0)
+      .map(student => ({
         id: student._id.toString(),
         encoding: student.faceEncoding
-      });
-    }
+      }));
 
     if (candidates.length === 0) {
       cleanupFiles(uploadedPaths);
@@ -412,7 +810,7 @@ const beginBiometricRegistration = async (req, res) => {
       success: true,
       options: {
         challenge,
-        rp: { name: 'FaceAttend', id: expectedRpId() },
+        rp: { name: 'StudySphere', id: expectedRpId() },
         user: {
           id: base64url(user._id.toString()),
           name: user.email,
@@ -583,7 +981,7 @@ const finishBiometricLogin = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
-      .populate('enrolledSubjects', 'name code')
+      .populate('enrolledSubjects', 'name code branch semester')
       .select('-password -faceEncoding -biometricChallenge');
     res.json({ success: true, user: safeUserPayload(user) });
   } catch (err) {
@@ -595,14 +993,225 @@ const getMe = async (req, res) => {
 // @desc    Update profile
 const updateProfile = async (req, res) => {
   try {
-    const { name, phone, address } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      { $set: { name, phone, address } },
-      { new: true, runValidators: true }
-    ).select('-password -faceEncoding');
-    res.json({ success: true, user });
+    const { name, email, phone, address, currentPassword, newPassword, fatherName, semester, dateOfBirth } = req.body;
+    const user = await User.findById(req.user._id).select('+password +faceEncoding');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    let requiresApproval = false;
+    let semesterChangedDirectly = false;
+
+    if (newPassword) {
+      const policy = validateStrongPassword(newPassword);
+      if (!policy.valid) {
+        cleanupFiles([req.file?.path]);
+        return res.status(400).json({ success: false, message: policy.message });
+      }
+      if (!currentPassword) {
+        cleanupFiles([req.file?.path]);
+        return res.status(400).json({ success: false, message: 'Current password is required to set a new password.' });
+      }
+      if (!(await user.matchPassword(currentPassword))) {
+        cleanupFiles([req.file?.path]);
+        return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
+      }
+      user.password = newPassword;
+    }
+
+    if (user.role === 'student') {
+      const requestedFields = {};
+      if (name !== undefined && String(name || '').trim() && String(name || '').trim() !== user.name) {
+        requestedFields.name = String(name || '').trim();
+      }
+      if (fatherName !== undefined && String(fatherName || '').trim() !== String(user.fatherName || '')) {
+        requestedFields.fatherName = String(fatherName || '').trim();
+      }
+      if (phone !== undefined && String(phone || '').trim() !== String(user.phone || '')) {
+        requestedFields.phone = String(phone || '').trim();
+      }
+      if (address !== undefined && String(address || '').trim() !== String(user.address || '').trim()) {
+        requestedFields.address = String(address || '').trim();
+      }
+      if (dateOfBirth !== undefined) {
+        if (!dateOfBirth) {
+          if (user.dateOfBirth) requestedFields.dateOfBirth = '';
+        } else {
+          const parsedDob = parseDateOnlyAsLocalDay(dateOfBirth);
+          if (Number.isNaN(parsedDob.getTime())) {
+            cleanupFiles([req.file?.path]);
+            return res.status(400).json({ success: false, message: 'Select a valid date of birth.' });
+          }
+          const currentDob = user.dateOfBirth && !Number.isNaN(new Date(user.dateOfBirth).getTime())
+            ? toLocalDateValue(new Date(user.dateOfBirth))
+            : '';
+          const nextDob = toLocalDateValue(parsedDob);
+          if (nextDob !== currentDob) requestedFields.dateOfBirth = nextDob;
+        }
+      }
+      if (email !== undefined) {
+        const nextEmail = String(email || '').trim().toLowerCase();
+        if (!nextEmail) {
+          cleanupFiles([req.file?.path]);
+          return res.status(400).json({ success: false, message: 'Email is required.' });
+        }
+        if (nextEmail !== user.email) {
+          const existing = await User.findOne({ email: nextEmail, _id: { $ne: user._id } }).select('_id');
+          if (existing) {
+            cleanupFiles([req.file?.path]);
+            return res.status(409).json({ success: false, message: 'Email is already in use.' });
+          }
+          const verifiedEmailUpdate = await latestActiveOtp({
+            purpose: 'student_email_update',
+            email: nextEmail,
+            emailVerified: true
+          });
+          if (!verifiedEmailUpdate) {
+            cleanupFiles([req.file?.path]);
+            return res.status(400).json({ success: false, message: 'Verify OTP on the new email before requesting email change.' });
+          }
+          requestedFields.email = nextEmail;
+          verifiedEmailUpdate.consumedAt = new Date();
+          await verifiedEmailUpdate.save();
+        }
+      }
+
+      if (Object.keys(requestedFields).length) {
+        user.pendingProfileUpdate = {
+          status: 'pending',
+          requestedAt: new Date(),
+          requestedFields
+        };
+        requiresApproval = true;
+
+        const notification = await Notification.create({
+          recipientRole: 'admin',
+          type: 'student_profile_update_request',
+          title: 'Student Profile Update Request',
+          message: `${user.name} requested changes to ${Object.keys(requestedFields).join(', ')}.`,
+          data: {
+            studentId: user._id,
+            studentName: user.name,
+            department: user.department,
+            semester: user.semester,
+            requestedFields
+          },
+          priority: 'medium'
+        });
+        const io = req.app.get('io');
+        if (io) {
+          io.to('admin_room').emit('notification_created', notification);
+          io.to(adminDepartmentRoom(user.department)).emit('notification_created', notification);
+          io.to('admin_room').emit('student_profile_update_requested', { studentId: user._id });
+          io.to(adminDepartmentRoom(user.department)).emit('student_profile_update_requested', { studentId: user._id });
+        }
+      }
+
+      if (semester !== undefined && Number(semester) !== Number(user.semester)) {
+        const nextSemester = Number(semester);
+        if (!Number.isInteger(nextSemester) || nextSemester < 1 || nextSemester > 8) {
+          cleanupFiles([req.file?.path]);
+          return res.status(400).json({ success: false, message: 'Select a valid semester.' });
+        }
+        const lastChange = user.semesterUpdatedAt ? new Date(user.semesterUpdatedAt).getTime() : 0;
+        const waitMs = 24 * 60 * 60 * 1000 - (Date.now() - lastChange);
+        if (lastChange && waitMs > 0) {
+          cleanupFiles([req.file?.path]);
+          return res.status(429).json({
+            success: false,
+            message: `Semester can be changed only once every 24 hours. Try again in ${Math.ceil(waitMs / (60 * 60 * 1000))} hour(s).`
+          });
+        }
+        user.semester = nextSemester;
+        user.semesterUpdatedAt = new Date();
+        user.enrolledSubjects = [];
+        semesterChangedDirectly = true;
+      }
+
+      if (address !== undefined && requestedFields.address === undefined) user.address = String(address || '').trim();
+    } else {
+      if (name !== undefined) user.name = String(name || '').trim() || user.name;
+      if (email !== undefined) {
+      const nextEmail = String(email || '').trim().toLowerCase();
+      if (!nextEmail) {
+        cleanupFiles([req.file?.path]);
+        return res.status(400).json({ success: false, message: 'Email is required.' });
+      }
+      if (nextEmail !== user.email) {
+        const existing = await User.findOne({ email: nextEmail, _id: { $ne: user._id } }).select('_id');
+        if (existing) {
+          cleanupFiles([req.file?.path]);
+          return res.status(409).json({ success: false, message: 'Email is already in use.' });
+        }
+        user.email = nextEmail;
+      }
+    }
+      if (phone !== undefined) user.phone = String(phone || '').trim();
+      if (address !== undefined) user.address = String(address || '').trim();
+      if (dateOfBirth !== undefined) {
+        if (!dateOfBirth) user.dateOfBirth = undefined;
+        else {
+          const parsedDob = parseDateOnlyAsLocalDay(dateOfBirth);
+          if (Number.isNaN(parsedDob.getTime())) {
+            cleanupFiles([req.file?.path]);
+            return res.status(400).json({ success: false, message: 'Select a valid date of birth.' });
+          }
+          user.dateOfBirth = parsedDob;
+        }
+      }
+    }
+
+    if (req.file?.path) {
+      let nextEncoding = null;
+      if (user.role === 'student') {
+        const validation = await validateImageForEncoding(req.file.path, req.file.originalname || 'profile_update.jpg', 60000);
+        if (!validation.valid || !Array.isArray(validation.encoding) || validation.encoding.length === 0) {
+          cleanupFiles([req.file.path]);
+          return res.status(400).json({
+            success: false,
+            message: validation.message || 'Upload a clear, front-facing photo.'
+          });
+        }
+        if (Array.isArray(user.faceEncoding) && user.faceEncoding.length) {
+          const comparison = compareFaceEncodings(user.faceEncoding, validation.encoding);
+          if (!comparison.match) {
+            cleanupFiles([req.file.path]);
+            return res.status(400).json({
+              success: false,
+              message: 'New profile image does not match your registered face. Use your own clear front-facing photo.',
+              confidence: comparison.confidence
+            });
+          }
+        }
+        nextEncoding = validation.encoding;
+      }
+      const oldPublicId = user.profileImagePublicId;
+      const uploaded = await uploadImage(req.file.path, {
+        folder: `${process.env.CLOUDINARY_FOLDER || 'studysphere'}/profiles`,
+        publicId: `profile_${user._id}_${Date.now()}`,
+        timeout: 60000
+      });
+      user.profileImage = uploaded.url;
+      user.profileImagePublicId = uploaded.publicId;
+      if (user.role === 'student') {
+        user.faceImagePath = uploaded.url;
+        if (nextEncoding) user.faceEncoding = nextEncoding;
+      }
+      cleanupFiles([req.file.path]);
+      if (oldPublicId) {
+        try { await deleteImage(oldPublicId); } catch (err) { console.error('Old profile image cleanup error:', err.message); }
+      }
+    }
+
+    await user.save();
+    if (semesterChangedDirectly) {
+      await enrollStudentInMatchingSubjects(user);
+    }
+    res.json({
+      success: true,
+      requiresApproval,
+      message: requiresApproval ? 'Profile change request sent to department admin for approval.' : 'Profile updated successfully.',
+      user: safeUserPayload(user)
+    });
   } catch (err) {
+    cleanupFiles([req.file?.path]);
     console.error('updateProfile error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
@@ -610,8 +1219,10 @@ const updateProfile = async (req, res) => {
 
 const updateAdminScope = async (req, res) => {
   try {
-    if (req.user.role !== 'admin' || req.user.department === SYSTEM_ADMIN_DEPARTMENT) {
-      return res.status(403).json({ success: false, message: 'Department admin access required' });
+    const isDepartmentAdmin = req.user.role === 'admin' && req.user.department !== SYSTEM_ADMIN_DEPARTMENT;
+    const isTeacher = req.user.role === 'teacher';
+    if (!isDepartmentAdmin && !isTeacher) {
+      return res.status(403).json({ success: false, message: 'Department admin or teacher access required' });
     }
 
     const year = Number(req.body.year);
@@ -646,8 +1257,15 @@ const updateAdminScope = async (req, res) => {
 
 module.exports = {
   detectRegistrationFace,
+  sendRegistrationOtp,
+  verifyRegistrationOtp,
+  sendProfileEmailOtp,
+  verifyProfileEmailOtp,
   register,
   login,
+  sendForgotPasswordOtp,
+  verifyForgotPasswordOtp,
+  resetForgotPassword,
   faceLogin,
   beginBiometricRegistration,
   finishBiometricRegistration,

@@ -14,6 +14,18 @@ services:
     networks:
       - attendance_net
 
+  redis:
+    image: redis:7-alpine
+    container_name: studysphere_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - attendance_net
+
   backend:
     build:
       context: ./backend
@@ -28,12 +40,19 @@ services:
       JWT_SECRET: supersecretjwtkey_change_in_production
       JWT_EXPIRE: 7d
       ML_SERVICE_URL: http://ml-service:8000
+      ML_KEEPALIVE_ENABLED: ${ML_KEEPALIVE_ENABLED:-false}
+      ML_KEEPALIVE_URL: ${ML_KEEPALIVE_URL:-http://ml-service:8000}
+      ML_KEEPALIVE_INTERVAL_MS: ${ML_KEEPALIVE_INTERVAL_MS:-60000}
+      ML_KEEPALIVE_TIMEOUT_MS: ${ML_KEEPALIVE_TIMEOUT_MS:-10000}
       FRONTEND_URL: http://localhost:5173
       NODE_ENV: production
       CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
       CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
       CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
-      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-faceattend}
+      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-studysphere}
+      REDIS_URL: redis://redis:6379
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_DEFAULT_TTL_SECONDS: ${CACHE_DEFAULT_TTL_SECONDS:-60}
       ADMIN_EMAIL: admin@school.edu
       ADMIN_PASSWORD: Admin@123456
       ADMIN_NAME: System Administrator
@@ -42,6 +61,7 @@ services:
       - ./backend/uploads:/app/uploads
     depends_on:
       - mongodb
+      - redis
     networks:
       - attendance_net
 
@@ -84,3 +104,4 @@ networks:
 
 volumes:
   mongo_data:
+  redis_data:

@@ -1,7 +1,11 @@
 require('dotenv').config();
+const dns = require('dns');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const { SYSTEM_ADMIN_DEPARTMENT } = require('../utils/adminScope');
+
+mongoose.set('strictQuery', true);
+dns.setServers((process.env.DNS_SERVERS || '1.1.1.1,8.8.8.8').split(',').map(server => server.trim()));
 
 const departmentAdmins = [
   { department: 'Computer Science', name: 'CSE Department Admin', email: 'cse.admin@school.edu' },
@@ -36,7 +40,13 @@ const createAdminIfMissing = async ({ name, email, password, department }) => {
 
 const seedAdmin = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
+    if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is missing');
+
+    await mongoose.connect(process.env.MONGODB_URI, {
+      family: 4,
+      serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 15000),
+      socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),
+    });
     console.log('Connected to MongoDB');
 
     const systemPassword = process.env.ADMIN_PASSWORD || 'Admin@123456';
@@ -69,9 +79,13 @@ const seedAdmin = async () => {
     console.log('Change these passwords after first login.');
     console.log('');
 
+    await mongoose.disconnect();
     process.exit(0);
   } catch (error) {
     console.error('Error seeding admins:', error.message);
+    try {
+      await mongoose.disconnect();
+    } catch {}
     process.exit(1);
   }
 };

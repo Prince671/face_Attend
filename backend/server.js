@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -9,10 +10,15 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const connectDB = require('./config/db');
+const { connectRedis, closeRedis } = require('./config/redis');
 const { closeExpiredAttendance } = require('./utils/attendanceAutoClose');
 const { cleanupExpiredAttendanceCaptures } = require('./utils/attendanceCaptureCleanup');
+const { sendUpcomingLectureReminders } = require('./utils/lectureReminderScheduler');
+const { runLmsDeadlineChecks } = require('./utils/lmsDeadlineScheduler');
+const { startMlKeepAlive } = require('./utils/mlKeepAlive');
 const { processExpiredPendingDeletions } = require('./utils/pendingDeletion');
 const { adminDepartmentRoom, SYSTEM_ADMIN_DEPARTMENT } = require('./utils/adminScope');
+const User = require('./models/User');
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -23,6 +29,11 @@ const subjectRoutes = require('./routes/subjectRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const timetableRoutes = require('./routes/timetableRoutes');
 const deletionRoutes = require('./routes/deletionRoutes');
+const holidayRoutes = require('./routes/holidayRoutes');
+const lmsRoutes = require('./routes/lmsRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const ChatGroup = require('./models/ChatGroup');
+const ChatGroupMember = require('./models/ChatGroupMember');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,8 +51,17 @@ const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173'
 ]);
+const isPrivateLanOrigin = (origin) => {
+  try {
+    const { protocol, hostname } = new URL(origin);
+    if (!['http:', 'https:'].includes(protocol)) return false;
+    return /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(hostname);
+  } catch {
+    return false;
+  }
+};
 const corsOrigin = (origin, callback) => {
-  if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+  if (!origin || allowedOrigins.has(origin) || isPrivateLanOrigin(origin)) return callback(null, true);
   return callback(new Error(`Origin ${origin} is not allowed by CORS`));
 };
 
@@ -55,8 +75,15 @@ const io = new Server(server, {
 
 app.set('io', io);
 connectDB();
+connectRedis().catch(() => {});
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use((req, res, next) => {
+  if (req.headers['access-control-request-private-network'] === 'true') {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+  next();
+});
 app.use(cors({
   origin: corsOrigin,
   credentials: true
@@ -92,8 +119,6 @@ app.use(express.json({ limit: bodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 app.use(morgan(isDevelopment ? 'dev' : 'combined'));
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/student', studentRoutes);
@@ -103,6 +128,9 @@ app.use('/api/subjects', subjectRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/timetables', timetableRoutes);
 app.use('/api/deletions', deletionRoutes);
+app.use('/api/holidays', holidayRoutes);
+app.use('/api/lms', lmsRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'Server is running', timestamp: new Date() });
@@ -117,11 +145,60 @@ app.get('/api/ready', (req, res) => {
   });
 });
 
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) return next(new Error('Socket authentication required'));
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select('_id role department status isRestricted').lean();
+    if (!user || ['inactive', 'pending'].includes(user.status)) {
+      return next(new Error('Socket authentication failed'));
+    }
+    socket.user = user;
+    return next();
+  } catch (error) {
+    return next(new Error('Socket authentication failed'));
+  }
+});
+
+const chatPresence = new Map();
+const chatLastSeen = new Map();
+
+const chatPresencePayload = (groupId) => ({
+  groupId,
+  onlineUserIds: [...(chatPresence.get(String(groupId)) || new Map()).keys()],
+  lastSeenByUserId: Object.fromEntries(chatLastSeen.get(String(groupId)) || new Map()),
+});
+
+const leavePresenceRoom = (socket, groupId) => {
+  const key = String(groupId);
+  const roomMap = chatPresence.get(key);
+  if (!roomMap) return;
+  const userId = String(socket.user?._id || '');
+  const sockets = roomMap.get(userId);
+  if (sockets) {
+    sockets.delete(socket.id);
+    if (!sockets.size) roomMap.delete(userId);
+  }
+  if (userId) {
+    const lastSeenMap = chatLastSeen.get(key) || new Map();
+    lastSeenMap.set(userId, new Date().toISOString());
+    chatLastSeen.set(key, lastSeenMap);
+  }
+  if (!roomMap.size) chatPresence.delete(key);
+  io.to(`chat_group_${key}`).emit('chat_presence_updated', chatPresencePayload(key));
+};
+
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
   socket.on('join_admin', (department) => {
+    const user = socket.user;
+    if (!user || !['admin', 'teacher'].includes(user.role)) return;
+    if (user.role === 'teacher' && department && department !== user.department) return;
+    if (user.role === 'admin' && user.department !== SYSTEM_ADMIN_DEPARTMENT && department !== user.department) return;
     if (!department || department === SYSTEM_ADMIN_DEPARTMENT) {
+      if (user.department !== SYSTEM_ADMIN_DEPARTMENT) return;
       socket.join('admin_room');
     } else {
       socket.join(adminDepartmentRoom(department));
@@ -130,10 +207,100 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_student', (studentId) => {
+    if (!socket.user || socket.user.role !== 'student' || String(socket.user._id) !== String(studentId)) return;
     socket.join(`student_${studentId}`);
   });
 
+  socket.on('join_user', (userId) => {
+    if (!socket.user || String(socket.user._id) !== String(userId)) return;
+    socket.join(`user_${userId}`);
+    if (socket.user.role === 'student') socket.join(`chat_user_${userId}`);
+  });
+
+  socket.on('chat_join_room', async (groupId) => {
+    try {
+      if (!socket.user || socket.user.role !== 'student' || socket.user.isRestricted || socket.user.status === 'restricted') return;
+      const [group, membership] = await Promise.all([
+        ChatGroup.findOne({ _id: groupId, isDeleted: { $ne: true } }).select('_id').lean(),
+        ChatGroupMember.findOne({ group: groupId, user: socket.user._id, isActive: true }).select('_id hidePresence').lean()
+      ]);
+      if (group && membership) {
+        const key = String(groupId);
+        socket.join(`chat_group_${key}`);
+        socket.chatGroups = socket.chatGroups || new Set();
+        socket.chatGroups.add(key);
+        if (!membership.hidePresence) {
+          const roomMap = chatPresence.get(key) || new Map();
+          const userId = String(socket.user._id);
+          const sockets = roomMap.get(userId) || new Set();
+          sockets.add(socket.id);
+          roomMap.set(userId, sockets);
+          chatPresence.set(key, roomMap);
+        }
+        io.to(`chat_group_${key}`).emit('chat_presence_updated', chatPresencePayload(key));
+      }
+    } catch (error) {
+      console.error('chat_join_room error:', error.message);
+    }
+  });
+
+  socket.on('chat_leave_room', (groupId) => {
+    if (!socket.user || socket.user.role !== 'student') return;
+    const key = String(groupId);
+    socket.leave(`chat_group_${key}`);
+    socket.chatGroups?.delete(key);
+    leavePresenceRoom(socket, key);
+  });
+
+  socket.on('chat_typing', async ({ groupId, typing, mode }) => {
+    try {
+      if (!socket.user || socket.user.role !== 'student') return;
+      const membership = await ChatGroupMember.findOne({ group: groupId, user: socket.user._id, isActive: true }).select('_id').lean();
+      if (!membership) return;
+      socket.to(`chat_group_${groupId}`).emit('chat_typing', {
+        groupId,
+        userId: socket.user._id,
+        typing: Boolean(typing),
+        mode: mode === 'recording' ? 'recording' : 'typing'
+      });
+    } catch (error) {
+      console.error('chat_typing error:', error.message);
+    }
+  });
+
+  socket.on('chat_presence_set_hidden', async ({ groupId, hidden }) => {
+    try {
+      if (!socket.user || socket.user.role !== 'student') return;
+      const membership = await ChatGroupMember.findOne({ group: groupId, user: socket.user._id, isActive: true }).select('_id').lean();
+      if (!membership) return;
+      const key = String(groupId);
+      const userId = String(socket.user._id);
+      if (hidden) {
+        const roomMap = chatPresence.get(key);
+        const sockets = roomMap?.get(userId);
+        sockets?.delete(socket.id);
+        if (roomMap && (!sockets || !sockets.size)) roomMap.delete(userId);
+        if (roomMap && !roomMap.size) chatPresence.delete(key);
+        const lastSeenMap = chatLastSeen.get(key) || new Map();
+        lastSeenMap.set(userId, new Date().toISOString());
+        chatLastSeen.set(key, lastSeenMap);
+      } else {
+        const roomMap = chatPresence.get(key) || new Map();
+        const sockets = roomMap.get(userId) || new Set();
+        sockets.add(socket.id);
+        roomMap.set(userId, sockets);
+        chatPresence.set(key, roomMap);
+      }
+      io.to(`chat_group_${key}`).emit('chat_presence_updated', chatPresencePayload(key));
+    } catch (error) {
+      console.error('chat_presence_set_hidden error:', error.message);
+    }
+  });
+
   socket.on('disconnect', () => {
+    if (socket.chatGroups) {
+      [...socket.chatGroups].forEach(groupId => leavePresenceRoom(socket, groupId));
+    }
     console.log('Client disconnected:', socket.id);
   });
 });
@@ -179,6 +346,26 @@ const runPendingDeletionCleanup = () => {
 setTimeout(runPendingDeletionCleanup, 45 * 1000);
 const pendingDeletionCleanupInterval = setInterval(runPendingDeletionCleanup, 60 * 1000);
 
+const runLectureReminderScheduler = () => {
+  sendUpcomingLectureReminders(io).catch(err => {
+    console.error('Lecture reminder scheduler error:', err.message);
+  });
+};
+
+setTimeout(runLectureReminderScheduler, 20 * 1000);
+const lectureReminderInterval = setInterval(runLectureReminderScheduler, 60 * 1000);
+
+const runLmsDeadlineScheduler = () => {
+  runLmsDeadlineChecks(io).catch(err => {
+    console.error('LMS deadline scheduler error:', err.message);
+  });
+};
+
+setTimeout(runLmsDeadlineScheduler, 25 * 1000);
+const lmsDeadlineInterval = setInterval(runLmsDeadlineScheduler, 60 * 1000);
+
+const mlKeepAliveInterval = startMlKeepAlive();
+
 let isShuttingDown = false;
 const gracefulShutdown = (signal) => {
   if (isShuttingDown) return;
@@ -188,10 +375,14 @@ const gracefulShutdown = (signal) => {
   clearInterval(attendanceAutoCloseInterval);
   clearInterval(attendanceCaptureCleanupInterval);
   clearInterval(pendingDeletionCleanupInterval);
+  clearInterval(lectureReminderInterval);
+  clearInterval(lmsDeadlineInterval);
+  if (mlKeepAliveInterval) clearInterval(mlKeepAliveInterval);
 
   server.close(async () => {
     try {
       await mongoose.connection.close(false);
+      await closeRedis();
       console.log('Server and MongoDB connections closed.');
       process.exit(0);
     } catch (error) {

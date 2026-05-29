@@ -1,36 +1,34 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const ensureDir = (dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 };
 
-// Profile image storage
-const profileStorage = multer.diskStorage({
+const tempUploadDir = () => {
+  const dir = path.join(os.tmpdir(), 'studysphere-uploads');
+  ensureDir(dir);
+  return dir;
+};
+
+const tempStorage = (prefix) => multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../uploads/profiles');
-    ensureDir(dir);
-    cb(null, dir);
+    cb(null, tempUploadDir());
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `profile_${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`);
+    const ext = path.extname(file.originalname) || '';
+    cb(null, `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`);
   }
 });
 
-// Attendance capture storage
-const captureStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../uploads/captures');
-    ensureDir(dir);
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `capture_${Date.now()}_${Math.random().toString(36).substr(2, 9)}${ext}`);
-  }
-});
+const profileStorage = tempStorage('profile');
+const captureStorage = tempStorage('capture');
+const timetableStorage = tempStorage('timetable');
+const spreadsheetStorage = tempStorage('spreadsheet');
+const lmsStorage = tempStorage('lms');
+const chatStorage = tempStorage('chat');
 
 const imageFilter = (req, file, cb) => {
   const allowed = /jpeg|jpg|png|webp/;
@@ -57,13 +55,12 @@ const uploadCapture = multer({
 
 const timetableFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
-  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.xlsx', '.xls', '.csv'];
+  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.xlsx', '.csv'];
   const allowedMimes = [
     'image/jpeg',
     'image/png',
     'image/webp',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel',
     'text/csv',
     'application/csv'
   ];
@@ -71,14 +68,59 @@ const timetableFilter = (req, file, cb) => {
   if (allowedExtensions.includes(ext) || allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Only timetable images or Excel/CSV files are allowed'));
+    cb(new Error('Only timetable images, .xlsx, or .csv files are allowed'));
   }
 };
 
 const uploadTimetable = multer({
-  storage: captureStorage,
+  storage: timetableStorage,
   fileFilter: timetableFilter,
   limits: { fileSize: 12 * 1024 * 1024 }
 });
 
-module.exports = { uploadProfile, uploadCapture, uploadTimetable };
+const spreadsheetFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedExtensions = ['.xlsx', '.csv'];
+  const allowedMimes = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
+    'application/csv',
+    'application/octet-stream'
+  ];
+
+  if (allowedExtensions.includes(ext) || allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only .xlsx or .csv files are allowed'));
+  }
+};
+
+const uploadSpreadsheet = multer({
+  storage: spreadsheetStorage,
+  fileFilter: spreadsheetFilter,
+  limits: { fileSize: 8 * 1024 * 1024 }
+});
+
+const lmsFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const blocked = ['.exe', '.bat', '.cmd', '.ps1', '.sh', '.msi', '.dll'];
+  if (blocked.includes(ext)) {
+    cb(new Error('Executable files are not allowed'));
+  } else {
+    cb(null, true);
+  }
+};
+
+const uploadLmsFile = multer({
+  storage: lmsStorage,
+  fileFilter: lmsFileFilter,
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
+
+const uploadChatFile = multer({
+  storage: chatStorage,
+  fileFilter: lmsFileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
+module.exports = { uploadProfile, uploadCapture, uploadTimetable, uploadSpreadsheet, uploadLmsFile, uploadChatFile };

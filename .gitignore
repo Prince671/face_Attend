@@ -9,12 +9,18 @@ node_modules/
 backend/.env
 frontend/.env
 ml-service/.env
+*.local
+*.secret
+*.pem
+*.key
 
 # Build output
 dist/
 build/
 frontend/dist/
 frontend/build/
+.vite/
+**/.vite/
 
 # Python
 __pycache__/
@@ -28,24 +34,51 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Local uploads and generated media
+# Local upload folders are not used; media belongs in Cloudinary.
 uploads/
-backend/uploads/profiles/*
-backend/uploads/captures/*
-!backend/uploads/profiles/.gitkeep
-!backend/uploads/captures/.gitkeep
+backend/uploads/
+ml-service/uploads/
+captures/
+backend/captures/
+profile-images/
+chat-media/
+lms-media/
+
+# Generated exports and temporary files
+data/
+.data/
+backend/data/
+frontend/data/
+ml-service/data/
+exports/
+backend/exports/
+tmp/
+temp/
+backend/tmp/
+backend/temp/
+*.tmp
+*.temp
 
 # Logs and coverage
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
 .npm
 coverage/
 htmlcov/
+.nyc_output/
 
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+Microsoft/
+
+# Runtime/cache metadata
+.cache/
+**/.cache/
+.eslintcache

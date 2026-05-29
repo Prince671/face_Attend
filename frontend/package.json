@@ -1,5 +1,5 @@
 {
-  "name": "attendance-frontend",
+  "name": "studysphere-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -9,25 +9,28 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@reduxjs/toolkit": "^2.12.0",
+    "@zxing/browser": "^0.2.0",
     "axios": "^1.6.5",
     "date-fns": "^3.2.0",
+    "framer-motion": "^10.18.0",
+    "lucide-react": "^0.312.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.1",
+    "react-redux": "^9.3.0",
     "react-router-dom": "^6.21.3",
-    "recharts": "^2.10.3",
-    "socket.io-client": "^4.6.2",
-    "lucide-react": "^0.312.0",
     "react-webcam": "^7.2.0",
-    "framer-motion": "^10.18.0"
+    "recharts": "^2.10.3",
+    "socket.io-client": "^4.6.2"
   },
   "devDependencies": {
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
-    "vite": "^5.0.11"
+    "vite": "^8.0.14"
   }
 }

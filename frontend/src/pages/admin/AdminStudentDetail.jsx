@@ -1,17 +1,37 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { CheckCircle, XCircle, UserX, UserCheck, Trash2, Shield, BookOpen, ArrowLeft } from 'lucide-react';
+import { CheckCircle, XCircle, UserX, UserCheck, Trash2, Shield, ShieldOff, BookOpen, ArrowLeft, Clock } from 'lucide-react';
 import { adminAPI, subjectAPI } from '../../services/api';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
-import { PageLoader } from '../../components/LoadingStates';
+import { PageSkeleton } from '../../components/LoadingStates';
 import AppConfirmModal from '../../components/AppConfirmModal';
 import { handleDeleteScheduled } from '../../utils/deleteUndo';
+import { getAcademicBranchLabel, getAcademicLabel, getSemesterLabel } from '../../utils/academicLabels';
+import { useSocket } from '../../context/SocketContext';
+
+const normalizeBranch = (value) => {
+  const branch = String(value || '').trim();
+  return /^(general|unassigned branch)$/i.test(branch) ? '' : branch;
+};
+
+const isComputerScienceDepartment = (department) => /computer|cse|cs/i.test(String(department || ''));
+
+const subjectMatchesStudent = (subject, student) => {
+  if (!subject || !student) return false;
+  if (subject.department !== student.department) return false;
+  if (Number(subject.semester) !== Number(student.semester)) return false;
+  if (!isComputerScienceDepartment(subject.department)) return true;
+  const studentBranch = normalizeBranch(student.branch) || 'Computer Science';
+  const subjectBranch = normalizeBranch(subject.branch) || 'Computer Science';
+  return studentBranch === subjectBranch;
+};
 
 export default function AdminStudentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { socket } = useSocket();
   const [student, setStudent] = useState(null);
   const [subjects, setSubjects] = useState([]);
   const [enrolled, setEnrolled] = useState([]);
@@ -19,7 +39,8 @@ export default function AdminStudentDetail() {
   const [saving, setSaving] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
-  useEffect(() => {
+  const loadStudent = useCallback(() => {
+    setLoading(true);
     Promise.all([adminAPI.getById(id), subjectAPI.getAll()])
       .then(([s, sub]) => {
         setStudent(s.data.student);
@@ -29,12 +50,26 @@ export default function AdminStudentDetail() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  useEffect(() => {
+    loadStudent();
+  }, [loadStudent]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const refreshIfCurrentStudent = (data = {}) => {
+      if (!data.studentId || String(data.studentId) === String(id)) loadStudent();
+    };
+    socket.on('student_profile_changed', refreshIfCurrentStudent);
+    return () => socket.off('student_profile_changed', refreshIfCurrentStudent);
+  }, [socket, id, loadStudent]);
+
   const handleAction = async (action) => {
     try {
       if (action === 'approve') { await adminAPI.approve(id); toast.success('Approved!'); }
       else if (action === 'activate') { await adminAPI.activate(id); toast.success('Activated!'); }
       else if (action === 'deactivate') { await adminAPI.deactivate(id); toast.success('Deactivated'); }
       else if (action === 'restrict') { await adminAPI.restrict(id, 'Manually restricted by admin'); toast.success('Restricted'); }
+      else if (action === 'unrestrict') { await adminAPI.unrestrict(id); toast.success('Unrestricted'); }
       else if (action === 'delete') {
         const res = await adminAPI.delete(id);
         handleDeleteScheduled({ response: res, label: 'Student' });
@@ -56,8 +91,26 @@ export default function AdminStudentDetail() {
     finally { setSaving(false); }
   };
 
-  if (loading) return <PageLoader label="Loading student profile..." />;
+  const handleProfileUpdateReview = async (status) => {
+    try {
+      if (status === 'approved') {
+        await adminAPI.approveProfileUpdate(id);
+        toast.success('Profile update approved.');
+      } else {
+        await adminAPI.rejectProfileUpdate(id, 'Rejected by department admin');
+        toast.success('Profile update rejected.');
+      }
+      const res = await adminAPI.getById(id);
+      setStudent(res.data.student);
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not review profile update.');
+    }
+  };
+
+  if (loading) return <PageSkeleton variant="detail" rows={5} />;
   if (!student) return <div className="text-center py-20 text-slate-400">Student not found</div>;
+  const academicLabel = getAcademicLabel(student);
+  const matchingSubjects = subjects.filter(subject => subjectMatchesStudent(subject, student));
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -75,8 +128,8 @@ export default function AdminStudentDetail() {
 
       <AdminBreadcrumb items={[
         { label: 'Departments', onClick: () => navigate('/admin/students') },
-        student.department && { label: student.department },
-        student.semester && { label: `Semester ${student.semester}` },
+        { label: academicLabel },
+        student.semester && { label: getSemesterLabel(student.semester) },
         { label: student.name }
       ]} />
 
@@ -94,8 +147,10 @@ export default function AdminStudentDetail() {
 
           <div className="mt-4 space-y-2 text-sm text-left">
             {[
+              ['Course', student.course || '-'],
+              ['Branch', getAcademicBranchLabel(student)],
               ['Department', student.department],
-              ['Semester', `Semester ${student.semester}`],
+              ['Semester', getSemesterLabel(student.semester)],
               ['Phone', student.phone || '—'],
               ['Joined', new Date(student.createdAt).toLocaleDateString()],
             ].map(([l, v]) => (
@@ -119,6 +174,40 @@ export default function AdminStudentDetail() {
 
         {/* Actions + Subjects */}
         <div className="lg:col-span-2 space-y-6">
+          {student.pendingProfileUpdate?.status === 'pending' && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass-card border-amber-400/30"
+            >
+              <div className="mb-4 flex items-start gap-3">
+                <div className="rounded-xl bg-amber-500/10 p-3 text-amber-300">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-white">Pending Profile Update</h3>
+                  <p className="mt-1 text-sm text-slate-400">Review the requested student identity changes before they are applied.</p>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {Object.entries(student.pendingProfileUpdate.requestedFields || {}).map(([field, value]) => (
+                  <div key={field} className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">{field}</p>
+                    <p className="mt-1 text-sm font-medium text-white">{String(value || '-')}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <button type="button" onClick={() => handleProfileUpdateReview('approved')} className="btn-success inline-flex items-center justify-center gap-2">
+                  <CheckCircle className="h-4 w-4" /> Approve Changes
+                </button>
+                <button type="button" onClick={() => handleProfileUpdateReview('rejected')} className="btn-danger inline-flex items-center justify-center gap-2">
+                  <XCircle className="h-4 w-4" /> Reject Changes
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {/* Actions */}
           <div className="glass-card">
             <h3 className="font-semibold text-white mb-4">Account Actions</h3>
@@ -150,6 +239,11 @@ export default function AdminStudentDetail() {
                   <UserCheck className="w-4 h-4" /> Activate
                 </button>
               )}
+              {student.isRestricted && (
+                <button onClick={() => handleAction('unrestrict')} className="btn-success flex items-center gap-2">
+                  <ShieldOff className="w-4 h-4" /> Unrestrict Profile
+                </button>
+              )}
               <button onClick={() => setDeleteModalOpen(true)} className="btn-danger flex items-center gap-2 ml-auto">
                 <Trash2 className="w-4 h-4" /> Delete Student
               </button>
@@ -163,7 +257,7 @@ export default function AdminStudentDetail() {
                 <BookOpen className="w-5 h-5 text-primary-400" /> Enrolled Subjects
               </h3>
               <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
-                {subjects.filter(s => s.semester === student.semester).map(sub => (
+                {matchingSubjects.map(sub => (
                   <label key={sub._id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 cursor-pointer group">
                     <input
                       type="checkbox"
@@ -173,11 +267,11 @@ export default function AdminStudentDetail() {
                     />
                     <div className="flex-1">
                       <p className="text-sm font-medium text-white">{sub.name}</p>
-                      <p className="text-xs text-slate-500">{sub.code} · {sub.department}</p>
+                      <p className="text-xs text-slate-500">{sub.code} - {sub.branch || sub.department}</p>
                     </div>
                   </label>
                 ))}
-                {subjects.filter(s => s.semester === student.semester).length === 0 && (
+                {matchingSubjects.length === 0 && (
                   <p className="text-slate-500 text-sm text-center py-4">No subjects for Semester {student.semester}</p>
                 )}
               </div>

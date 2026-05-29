@@ -4,10 +4,13 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  password: { type: String, required: true, minlength: 6 },
-  role: { type: String, enum: ['admin', 'student'], default: 'student' },
+  password: { type: String, required: true, minlength: 8 },
+  role: { type: String, enum: ['admin', 'student', 'teacher'], default: 'student' },
   studentId: { type: String, unique: true, sparse: true },
+  course: { type: String, trim: true },
   department: { type: String },
+  departments: [{ type: String, trim: true }],
+  branch: { type: String, default: '', trim: true },
   semester: { type: Number, min: 1, max: 8 },
   fatherName: { type: String, trim: true },
   dateOfBirth: { type: Date },
@@ -22,6 +25,13 @@ const userSchema = new mongoose.Schema({
   },
   isRestricted: { type: Boolean, default: false },
   restrictionReason: { type: String },
+  subjectRestrictions: [{
+    subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
+    restrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reason: { type: String },
+    restrictedAt: { type: Date, default: Date.now },
+    active: { type: Boolean, default: true }
+  }],
   enrolledSubjects: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Subject' }],
   createdAt: { type: Date, default: Date.now },
   approvedAt: { type: Date },
@@ -32,6 +42,15 @@ const userSchema = new mongoose.Schema({
   lastLogin: { type: Date },
   phone: { type: String },
   address: { type: String },
+  semesterUpdatedAt: { type: Date },
+  pendingProfileUpdate: {
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: undefined },
+    requestedAt: { type: Date },
+    requestedFields: { type: mongoose.Schema.Types.Mixed },
+    reviewedAt: { type: Date },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reviewNote: { type: String }
+  },
   pendingDeletion: { type: Boolean, default: false, index: true },
   deletionScheduledAt: { type: Date },
   deletionExpiresAt: { type: Date },
@@ -66,10 +85,15 @@ userSchema.methods.toSafeObject = function() {
 };
 
 userSchema.index({ role: 1, status: 1, pendingDeletion: 1 });
+userSchema.index({ role: 1, course: 1, branch: 1, semester: 1, status: 1, pendingDeletion: 1 });
 userSchema.index({ role: 1, department: 1, semester: 1, status: 1, pendingDeletion: 1 });
+userSchema.index({ role: 1, department: 1, branch: 1, semester: 1, status: 1, pendingDeletion: 1 });
+userSchema.index({ role: 1, departments: 1, status: 1, pendingDeletion: 1 });
 userSchema.index({ department: 1, semester: 1, pendingDeletion: 1 });
 userSchema.index({ enrolledSubjects: 1, status: 1, pendingDeletion: 1 });
+userSchema.index({ 'subjectRestrictions.subject': 1, 'subjectRestrictions.active': 1 });
 userSchema.index({ adminSemesterScope: 1, department: 1 });
 userSchema.index({ createdAt: -1 });
+userSchema.index({ 'pendingProfileUpdate.status': 1, department: 1, semester: 1 });
 
 module.exports = mongoose.model('User', userSchema);

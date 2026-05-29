@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { CreditCard, Download, Printer, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
+import { getAcademicLabel, getSemesterLabel, getStudentClassLabel } from '../../utils/academicLabels';
 
 const CAMPUS_IMAGE = '/id-assets/original-id-card-reference.jpg';
 
@@ -16,28 +17,29 @@ const formatDob = (value) => {
   return `${day}-${month}-${year}`;
 };
 
-const getSession = (createdAt) => {
-  const start = createdAt ? new Date(createdAt).getFullYear() : new Date().getFullYear();
-  const end = String(start + 4).slice(-2);
-  return `${start}-${end}`;
+const getCourseDuration = (course = '') => {
+  const text = String(course).toLowerCase();
+  if (text.includes('mba')) return 2;
+  if (text.includes('diploma') || text.includes('bba')) return 3;
+  return 4;
 };
 
-const getClassLabel = (user) => {
-  const dept = user?.department || 'Student';
-  const compact = dept
-    .replace(/Computer Science/i, 'CSE')
-    .replace(/Information Technology/i, 'IT')
-    .replace(/Electronics/i, 'EC')
-    .replace(/Mechanical/i, 'ME')
-    .replace(/Electrical/i, 'EE')
-    .replace(/Civil/i, 'CE')
-    .toUpperCase();
-  return `B Tech - ${compact}`;
+const getSession = (user) => {
+  const joinedAt = user?.createdAt ? new Date(user.createdAt) : new Date();
+  const year = joinedAt.getFullYear();
+  const month = joinedAt.getMonth();
+  const academicYearStart = month < 6 ? year - 1 : year;
+  const semester = Number(user?.semester) || 1;
+  const completedAcademicYears = Math.max(0, Math.ceil(semester / 2) - 1);
+  const start = academicYearStart - completedAcademicYears;
+  const end = String(start + getCourseDuration(user?.course)).slice(-2);
+  return `${start}-${end}`;
 };
 
 export default function StudentIdCard() {
   const { user } = useAuth();
   const photo = user?.profileImage;
+  const academicLabel = getAcademicLabel(user);
 
   return (
     <div className="space-y-6">
@@ -54,8 +56,8 @@ export default function StudentIdCard() {
       </div>
 
       <AdminBreadcrumb items={[
-        { label: user?.department || 'Department' },
-        user?.semester && { label: `Semester ${user.semester}` },
+        { label: academicLabel },
+        user?.semester && { label: getSemesterLabel(user.semester) },
         { label: 'ID Card' }
       ]} />
 
@@ -77,7 +79,7 @@ export default function StudentIdCard() {
             <div className="student-id-card__photo-row">
               <div className="student-id-card__side">
                 <span>BATCH</span>
-                <strong>{getSession(user?.createdAt)}</strong>
+                <strong>{getSession(user)}</strong>
               </div>
               <div className="student-id-card__photo">
                 {photo ? <img src={photo} alt={user?.name || 'Student'} /> : <span>{user?.name?.[0] || 'S'}</span>}
@@ -90,7 +92,7 @@ export default function StudentIdCard() {
             <div className="student-id-card__details">
               <div><span>F.Name</span><em>:</em><strong>{user?.fatherName || 'Not provided'}</strong></div>
               <div><span>D.O.B.</span><em>:</em><strong>{formatDob(user?.dateOfBirth)}</strong></div>
-              <div><span>Course</span><em>:</em><strong>{getClassLabel(user)}</strong></div>
+              <div><span>Course</span><em>:</em><strong>{getStudentClassLabel(user)}</strong></div>
               <div><span>Contact</span><em>:</em><strong>{user?.phone || 'Not provided'}</strong></div>
               <div><span>En. No.</span><em>:</em><strong>{user?.enrollmentNo || user?.studentId || '-'}</strong></div>
             </div>
@@ -122,8 +124,9 @@ export default function StudentIdCard() {
               ['Name', user?.name],
               ['Student ID', user?.studentId],
               ['Email', user?.email],
-              ['Department', user?.department],
-              ['Semester', user?.semester ? `Semester ${user.semester}` : '-'],
+              ['Course', user?.course || '-'],
+              ['Branch', academicLabel],
+              ['Semester', user?.semester ? getSemesterLabel(user.semester) : '-'],
               ['Father Name', user?.fatherName || 'Not provided'],
               ['Date of Birth', formatDob(user?.dateOfBirth)],
               ['Contact', user?.phone || 'Not provided'],

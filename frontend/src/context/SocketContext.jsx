@@ -1,13 +1,75 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 
-const SocketContext = createContext({ socket: null });
+const REALTIME_EVENTS = [
+  'new_registration',
+  'student_profile_changed',
+  'student_profile_update_requested',
+  'profile_update_resolved',
+  'account_status_changed',
+  'teacher_changed',
+  'academic_structure_changed',
+  'subject_updated',
+  'new_lecture',
+  'lecture_updated',
+  'lectures_changed',
+  'attendance_opened',
+  'attendance_closed',
+  'attendance_updated',
+  'attendance_marked',
+  'pending_deletions_changed',
+  'timetable_changed',
+  'holiday_changed',
+  'lms_changed',
+  'notification_created',
+  'audit_logs_changed',
+  'chat_group_created',
+  'chat_group_updated',
+  'chat_group_deleted',
+  'chat_member_added',
+  'chat_member_removed',
+  'chat_member_left',
+];
+
+const eventDomains = {
+  new_registration: ['students', 'dashboard'],
+  student_profile_changed: ['students', 'subjects', 'attendance', 'analytics', 'dashboard'],
+  student_profile_update_requested: ['students', 'dashboard'],
+  profile_update_resolved: ['profile', 'notifications'],
+  account_status_changed: ['profile', 'dashboard'],
+  teacher_changed: ['teachers', 'subjects', 'dashboard'],
+  academic_structure_changed: ['academic', 'subjects', 'teachers'],
+  subject_updated: ['subjects', 'attendance', 'lectures', 'dashboard'],
+  new_lecture: ['lectures', 'attendance', 'dashboard', 'timetable'],
+  lecture_updated: ['lectures', 'attendance', 'dashboard'],
+  lectures_changed: ['lectures', 'attendance', 'dashboard', 'timetable'],
+  attendance_opened: ['attendance', 'lectures', 'dashboard'],
+  attendance_closed: ['attendance', 'lectures', 'dashboard'],
+  attendance_updated: ['attendance', 'lectures', 'analytics', 'dashboard'],
+  attendance_marked: ['attendance', 'lectures', 'analytics', 'dashboard'],
+  pending_deletions_changed: ['pending-deletions', 'students', 'teachers', 'subjects', 'lectures'],
+  timetable_changed: ['timetable', 'lectures', 'dashboard'],
+  holiday_changed: ['timetable', 'lectures', 'notifications'],
+  lms_changed: ['lms', 'subjects', 'dashboard'],
+  notification_created: ['notifications', 'dashboard'],
+  audit_logs_changed: ['audit'],
+  chat_group_created: ['chat'],
+  chat_group_updated: ['chat'],
+  chat_group_deleted: ['chat'],
+  chat_member_added: ['chat'],
+  chat_member_removed: ['chat'],
+  chat_member_left: ['chat'],
+};
+
+const SocketContext = createContext({ socket: null, realtimeEvent: null, realtimeVersion: 0 });
 
 export const SocketProvider = ({ children }) => {
   const { user } = useAuth();
   const socketRef = useRef(null);
   const [socket, setSocket] = useState(null);
+  const [realtimeEvent, setRealtimeEvent] = useState(null);
+  const [realtimeVersion, setRealtimeVersion] = useState(0);
 
   useEffect(() => {
     // Don't connect until we actually have a user with an _id
@@ -17,6 +79,8 @@ export const SocketProvider = ({ children }) => {
         socketRef.current.disconnect();
         socketRef.current = null;
         setSocket(null);
+        setRealtimeEvent(null);
+        setRealtimeVersion(0);
       }
       return;
     }
@@ -25,6 +89,7 @@ export const SocketProvider = ({ children }) => {
     if (socketRef.current && socketRef.current.connected) return;
 
     const s = io(import.meta.env.VITE_SOCKET_URL || '/', {
+      auth: { token: localStorage.getItem('token') },
       withCredentials: true,
       transports: ['polling', 'websocket'],
       upgrade: true,
@@ -39,8 +104,13 @@ export const SocketProvider = ({ children }) => {
     const joinRoom = () => {
       if (user.role === 'admin') {
         s.emit('join_admin', user.department);
+        s.emit('join_user', user._id);
+      } else if (user.role === 'teacher') {
+        if (user.department) s.emit('join_admin', user.department);
+        s.emit('join_user', user._id);
       } else {
         s.emit('join_student', user._id);
+        s.emit('join_user', user._id);
       }
     };
 
@@ -56,23 +126,70 @@ export const SocketProvider = ({ children }) => {
     // If already connected (e.g. hot-reload), join immediately
     if (s.connected) joinRoom();
 
+    const forwardRealtimeEvent = (eventName, payload = {}) => {
+      if (!REALTIME_EVENTS.includes(eventName)) return;
+      const event = {
+        name: eventName,
+        payload,
+        domains: eventDomains[eventName] || [],
+        at: Date.now(),
+      };
+      setRealtimeEvent(event);
+      setRealtimeVersion(value => value + 1);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:realtime-change', { detail: event }));
+      }
+    };
+
+    s.onAny(forwardRealtimeEvent);
+
     socketRef.current = s;
     setSocket(s);
 
     return () => {
       s.off('connect');
       s.off('reconnect');
+      s.offAny(forwardRealtimeEvent);
       if (s.connected) s.disconnect();
       socketRef.current = null;
       setSocket(null);
     };
-  }, [user?._id, user?.role]); // Re-run only when user id/role changes
+  }, [user?._id, user?.role, user?.department]); // Re-run only when user identity or alert scope changes
+
+  const value = useMemo(() => ({ socket, realtimeEvent, realtimeVersion }), [socket, realtimeEvent, realtimeVersion]);
 
   return (
-    <SocketContext.Provider value={{ socket }}>
+    <SocketContext.Provider value={value}>
       {children}
     </SocketContext.Provider>
   );
 };
 
 export const useSocket = () => useContext(SocketContext);
+
+export const useRealtimeRefresh = (refresh, targets = [], deps = []) => {
+  const { realtimeEvent, realtimeVersion } = useSocket();
+  const refreshRef = useRef(refresh);
+  const targetsRef = useRef(targets);
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    targetsRef.current = targets;
+  }, [targets]);
+
+  const matches = useCallback((event) => {
+    if (!event) return false;
+    const wanted = targetsRef.current || [];
+    if (!wanted.length) return true;
+    return wanted.some(item => event.name === item || event.domains?.includes(item));
+  }, []);
+
+  useEffect(() => {
+    if (!realtimeEvent || !matches(realtimeEvent)) return undefined;
+    const timer = window.setTimeout(() => refreshRef.current?.(realtimeEvent), 120);
+    return () => window.clearTimeout(timer);
+  }, [realtimeVersion, realtimeEvent, matches, ...deps]);
+};

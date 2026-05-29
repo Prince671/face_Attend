@@ -6,13 +6,51 @@ import toast from 'react-hot-toast';
 import { Upload, Camera, CheckCircle, AlertCircle, Scan, X, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { authAPI } from '../../services/api';
 import ThemeToggle from '../../components/ThemeToggle';
+import { AuthButtonSkeleton, SkeletonLine } from '../../components/LoadingStates';
+import { getPasswordIssues, passwordRules } from '../../utils/passwordPolicy';
 
-const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
-const AUTO_CAPTURE_READY_FRAMES = 2;
+const COURSE_OPTIONS = {
+  'B. Tech': ['Computer Science', 'Mechanical Engineering', 'Electrical Engineering', 'AI/ML Engineering'],
+  Diploma: ['Computer Science', 'Mechanical Engineering', 'Electrical Engineering'],
+  BBA: [],
+  MBA: []
+};
+
+const COURSE_SEMESTERS = {
+  'B. Tech': [1, 2, 3, 4, 5, 6, 7, 8],
+  Diploma: [1, 2, 3, 4, 5, 6],
+  BBA: [1, 2, 3, 4, 5, 6],
+  MBA: [1, 2, 3, 4]
+};
+
+const REGISTER_FEATURES = [
+  {
+    title: 'Verified student onboarding',
+    description: 'Register with Gmail OTP, strong password validation, and a clean academic profile setup.'
+  },
+  {
+    title: 'Guided face capture',
+    description: 'Capture or upload a passport-style face image that powers secure attendance verification.'
+  },
+  {
+    title: 'Academic profile mapping',
+    description: 'Choose course, branch, and semester so the dashboard shows only the right subjects and lectures.'
+  }
+];
+
+const departmentFromCourseBranch = (course, branch) => {
+  if (course === 'BBA' || course === 'MBA') return course;
+  if (branch === 'Computer Science' || branch === 'AI/ML Engineering') return 'Computer Science';
+  if (branch === 'Mechanical Engineering') return 'Mechanical';
+  if (branch === 'Electrical Engineering') return 'Electrical';
+  return '';
+};
+const AUTO_CAPTURE_READY_FRAMES = 1;
 const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
-const PASSPORT_WIDTH = 480;
-const PASSPORT_HEIGHT = 640;
-const CAPTURE_QUALITY = 0.9;
+const PASSPORT_WIDTH = 420;
+const PASSPORT_HEIGHT = 560;
+const CAPTURE_QUALITY = 0.82;
+const INDIA_PHONE_PREFIX = '+91';
 const CAMERA_CONSTRAINTS = {
   facingMode: 'user',
   width: { ideal: 640, max: 1280 },
@@ -31,7 +69,7 @@ export default function RegisterPage() {
   const lastFaceBox = useRef(null);
   const [form, setForm] = useState({
     name: '', email: '', password: '', confirmPassword: '',
-    studentId: '', department: '', semester: '', fatherName: '', dateOfBirth: '', phone: '', address: ''
+    studentId: '', course: '', department: '', branch: '', semester: '', fatherName: '', dateOfBirth: '', phone: '', address: ''
   });
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -42,8 +80,15 @@ export default function RegisterPage() {
   const [autoCaptureReady, setAutoCaptureReady] = useState(false);
   const [autoCaptureAvailable, setAutoCaptureAvailable] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [emailOtp, setEmailOtp] = useState('');
+  const [otpAutoSentEmail, setOtpAutoSentEmail] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [step, setStep] = useState(1); // 1=personal, 2=photo, 3=done
+  const [activeFeature, setActiveFeature] = useState(0);
+  const passwordIssues = getPasswordIssues(form.password);
 
   const setSelectedPhoto = useCallback((file, previewUrl) => {
     if (photoPreview) URL.revokeObjectURL(photoPreview);
@@ -57,6 +102,13 @@ export default function RegisterPage() {
     };
   }, [photoPreview]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveFeature(previous => (previous + 1) % REGISTER_FEATURES.length);
+    }, 3400);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const handlePhotoChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -64,6 +116,109 @@ export default function RegisterPage() {
     if (file.size > 5 * 1024 * 1024) { toast.error('Image must be under 5MB'); return; }
     setCameraOpen(false);
     setSelectedPhoto(file, URL.createObjectURL(file));
+  };
+
+  const handleCourseChange = (course) => {
+    const branches = COURSE_OPTIONS[course] || [];
+    const branch = branches[0] || '';
+    setForm({
+      ...form,
+      course,
+      branch,
+      department: departmentFromCourseBranch(course, branch),
+      semester: ''
+    });
+  };
+
+  const handleBranchChange = (branch) => {
+    setForm({
+      ...form,
+      branch,
+      department: departmentFromCourseBranch(form.course, branch)
+    });
+  };
+
+  const resetOtpVerification = () => {
+    setOtpSent(false);
+    setOtpVerified(false);
+    setEmailOtp('');
+    setOtpAutoSentEmail('');
+  };
+
+  const handleEmailChange = (email) => {
+    setForm({ ...form, email });
+    resetOtpVerification();
+  };
+
+  const getIndianMobileDigits = (phone) => {
+    const raw = String(phone || '').trim();
+    const digits = raw.replace(/\D/g, '');
+    if (!digits) return '';
+    if (raw.startsWith(INDIA_PHONE_PREFIX)) return digits.replace(/^91/, '').slice(0, 10);
+    if (digits.startsWith('91') && digits.length > 10) return digits.slice(2, 12);
+    return digits.slice(0, 10);
+  };
+
+  const handlePhoneChange = (phone) => {
+    const digits = getIndianMobileDigits(phone);
+    setForm(previous => ({ ...previous, phone: digits ? `${INDIA_PHONE_PREFIX}${digits}` : '' }));
+  };
+
+  const sendRegistrationOtp = useCallback(async (silent = false) => {
+    const email = String(form.email || '').trim();
+    if (!email) {
+      if (!silent) toast.error('Enter your Gmail first.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (!silent) toast.error('Enter a valid Gmail address.');
+      return;
+    }
+    setOtpLoading(true);
+    setOtpAutoSentEmail(email);
+    try {
+      const res = await authAPI.sendRegistrationOtp({ email });
+      setOtpSent(true);
+      setOtpVerified(false);
+      toast.success(res.data.message || 'Gmail OTP sent.');
+    } catch (err) {
+      console.error('Registration OTP error:', err);
+      toast.error(err.response?.data?.message || 'Could not send Gmail OTP.');
+    } finally {
+      setOtpLoading(false);
+    }
+  }, [form.email]);
+
+  useEffect(() => {
+    const email = String(form.email || '').trim();
+    if (!email || otpVerified || otpLoading || otpAutoSentEmail === email) return undefined;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return undefined;
+
+    const timer = window.setTimeout(() => {
+      sendRegistrationOtp(true);
+    }, 5000);
+
+    return () => window.clearTimeout(timer);
+  }, [form.email, otpAutoSentEmail, otpLoading, otpVerified, sendRegistrationOtp]);
+
+  const verifyRegistrationOtp = async () => {
+    if (emailOtp.length !== 6) {
+      toast.error('Enter the 6 digit Gmail OTP.');
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      await authAPI.verifyRegistrationOtp({
+        email: form.email,
+        emailOtp
+      });
+      setOtpVerified(true);
+      toast.success('Gmail verified.');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not verify Gmail OTP.');
+    } finally {
+      setOtpLoading(false);
+    }
   };
 
   const dataUrlToFile = useCallback(async (dataUrl) => {
@@ -249,7 +404,7 @@ export default function RegisterPage() {
       setAutoCaptureStatus('Move your face into the oval');
     }
 
-    const detectionIntervalMs = detector ? 300 : 1800;
+    const detectionIntervalMs = detector ? 180 : 1400;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || photoPreview || captureInProgress.current) return;
@@ -341,7 +496,9 @@ export default function RegisterPage() {
     e.preventDefault();
     if (form.password !== form.confirmPassword) { toast.error('Passwords do not match'); return; }
     if (!photo) { toast.error('Please upload your passport photo'); return; }
-    if (form.password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
+    if (passwordIssues.length) { toast.error(`Password needs: ${passwordIssues.join(', ')}`); return; }
+    if (!otpVerified) { toast.error('Verify Gmail OTP before submitting registration.'); return; }
+    if (form.phone && getIndianMobileDigits(form.phone).length !== 10) { toast.error('Enter a valid 10 digit phone number.'); return; }
 
     setLoading(true);
     const formData = new FormData();
@@ -360,7 +517,7 @@ export default function RegisterPage() {
 
   if (step === 3) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 relative overflow-hidden">
+      <div className="min-h-dvh flex items-center justify-center bg-slate-950 relative overflow-hidden">
         <ThemeToggle className="fixed right-4 top-4 z-20" />
         <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 bg-emerald-600/15 rounded-full blur-3xl" />
         <motion.div initial={{ scale: 0.86, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 220, damping: 22 }} className="relative glass-card max-w-md w-full mx-4 text-center">
@@ -376,7 +533,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 py-10 relative overflow-hidden">
+    <div className="register-compact min-h-dvh flex items-center justify-center bg-slate-950 py-6 sm:py-8 relative overflow-hidden">
       <ThemeToggle className="fixed right-4 top-4 z-20" />
       <div className="absolute inset-0">
         <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-primary-600/15 rounded-full blur-3xl" />
@@ -385,39 +542,82 @@ export default function RegisterPage() {
           style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="relative z-10 w-full max-w-2xl mx-4">
-        <div className="text-center mb-8">
-          <motion.div whileHover={{ scale: 1.04, rotate: 1 }} className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary-600/20 border border-primary-500/30 mb-3">
-            <Scan className="w-7 h-7 text-primary-400" />
+      <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="relative z-10 mx-3 grid w-full max-w-6xl items-center gap-6 sm:mx-4 lg:grid-cols-[0.95fr_1.15fr]">
+        <div className="glass-card hidden min-h-[610px] overflow-hidden p-8 lg:flex lg:flex-col lg:justify-between">
+          <div>
+            <motion.div whileHover={{ scale: 1.04, rotate: 1 }} className="mb-7 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-600/20 border border-primary-500/30">
+              <Scan className="h-8 w-8 text-primary-300" />
+            </motion.div>
+            <h1 className="font-display text-5xl font-bold leading-tight text-white">StudySphere</h1>
+            <p className="mt-3 text-lg text-slate-300">Student registration made secure and simple</p>
+          </div>
+
+          <div className="relative rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <div className="absolute -bottom-16 -right-16 h-36 w-36 rounded-full bg-violet-500/20 blur-3xl" />
+            <motion.div
+              key={activeFeature}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+              className="relative"
+            >
+              <p className="text-xs uppercase tracking-[0.28em] text-primary-300">Registration step</p>
+              <h2 className="mt-3 text-2xl font-semibold text-white">{REGISTER_FEATURES[activeFeature].title}</h2>
+              <p className="mt-3 max-w-md text-sm leading-6 text-slate-300">{REGISTER_FEATURES[activeFeature].description}</p>
+            </motion.div>
+            <div className="mt-5 flex gap-2">
+              {REGISTER_FEATURES.map((_, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => setActiveFeature(index)}
+                  className={`h-1.5 rounded-full transition-all ${activeFeature === index ? 'w-9 bg-primary-400' : 'w-4 bg-white/20 hover:bg-white/40'}`}
+                  aria-label={`Show registration feature ${index + 1}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-xs text-slate-300">
+            {['Gmail OTP', 'Face profile', 'Course mapping'].map(item => (
+              <div key={item} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center">{item}</div>
+            ))}
+          </div>
+        </div>
+
+        <div className="min-w-0">
+        <div className="text-center mb-4 sm:mb-5 lg:hidden">
+          <motion.div whileHover={{ scale: 1.04, rotate: 1 }} className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-primary-600/20 border border-primary-500/30 mb-2">
+            <Scan className="w-5 h-5 text-primary-400" />
           </motion.div>
-          <h1 className="font-display text-3xl font-bold text-white">Student Registration</h1>
-          <p className="text-slate-400 mt-1">Create your account to get started</p>
+          <h1 className="font-display text-2xl font-bold text-white">Student Registration</h1>
+          <p className="text-sm text-slate-400 mt-1">Create your account to get started</p>
         </div>
 
         {/* Steps indicator */}
-        <div className="flex items-center justify-center gap-3 mb-6">
+        <div className="flex items-center justify-center gap-2 mb-4">
           {[1, 2].map(s => (
             <React.Fragment key={s}>
-              <motion.div layout className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${step >= s ? 'bg-primary-600 text-white' : 'bg-white/10 text-slate-400'}`}>{s}</motion.div>
-              {s < 2 && <div className={`h-0.5 w-12 transition-all ${step > s ? 'bg-primary-600' : 'bg-white/10'}`} />}
+              <motion.div layout className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-all ${step >= s ? 'bg-primary-600 text-white' : 'bg-white/10 text-slate-400'}`}>{s}</motion.div>
+              {s < 2 && <div className={`h-0.5 w-10 transition-all ${step > s ? 'bg-primary-600' : 'bg-white/10'}`} />}
             </React.Fragment>
           ))}
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="glass-card space-y-5">
+          <div className="glass-card space-y-4 p-4 sm:p-5">
             <AnimatePresence mode="wait">
             {step === 1 && (
-              <motion.div key="personal" initial={{ opacity: 0, x: 28, filter: 'blur(4px)' }} animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, x: -24, filter: 'blur(4px)' }} transition={{ duration: 0.24 }} className="space-y-4">
-                <h2 className="text-lg font-semibold text-white mb-4">Personal Information</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <motion.div key="personal" initial={{ opacity: 0, x: 28, filter: 'blur(4px)' }} animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, x: -24, filter: 'blur(4px)' }} transition={{ duration: 0.24 }} className="space-y-3">
+                <h2 className="text-base font-semibold text-white">Personal Information</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <label className="label">Full Name *</label>
                     <input className="input-field" placeholder="John Doe" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
                   </div>
                   <div>
                     <label className="label">Student ID *</label>
-                    <input className="input-field" placeholder="CS2021001" value={form.studentId} onChange={e => setForm({ ...form, studentId: e.target.value })} required />
+                    <input className="input-field" placeholder="CS2021001" value={form.studentId} onChange={e => { setForm({ ...form, studentId: e.target.value }); resetOtpVerification(); }} required />
                   </div>
                   <div>
                     <label className="label">Father's Name</label>
@@ -429,34 +629,92 @@ export default function RegisterPage() {
                   </div>
                   <div>
                     <label className="label">Email Address *</label>
-                    <input type="email" className="input-field" placeholder="john@college.edu" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
+                    <div className="flex gap-2">
+                      <input type="email" className="input-field flex-1" placeholder="john@college.edu" value={form.email} onChange={e => handleEmailChange(e.target.value)} required />
+                      {form.email.trim() && (
+                        <button type="button" onClick={() => sendRegistrationOtp(false)} disabled={otpLoading || otpVerified} className="btn-secondary whitespace-nowrap px-3 sm:px-4">
+                          {otpLoading && !otpSent ? <AuthButtonSkeleton className="min-w-16" /> : otpVerified ? 'Verified' : otpSent ? 'Resend' : 'Verify'}
+                        </button>
+                      )}
+                    </div>
+                    {!otpSent && !otpVerified && form.email && (
+                      <p className="mt-1 text-[11px] text-slate-500">OTP will auto-send 5 seconds after you stop typing.</p>
+                    )}
+                    {otpSent && !otpVerified && (
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          className="input-field flex-1 text-center tracking-[0.28em]"
+                          placeholder="Gmail OTP"
+                          value={emailOtp}
+                          onChange={e => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        />
+                        <button type="button" onClick={verifyRegistrationOtp} disabled={otpLoading || emailOtp.length !== 6} className="btn-primary whitespace-nowrap px-4">
+                          {otpLoading ? <AuthButtonSkeleton className="min-w-20" /> : 'Verify OTP'}
+                        </button>
+                      </div>
+                    )}
+                    {otpVerified && (
+                      <p className="mt-2 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
+                        <CheckCircle className="h-3.5 w-3.5" /> Gmail verified
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="label">Phone Number</label>
-                    <input type="tel" className="input-field" placeholder="+91 98765 43210" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+                    <div className="flex min-h-[42px] overflow-hidden rounded-lg border border-white/10 bg-white/5 transition-colors focus-within:border-primary-500">
+                      <span className="flex min-w-[3.75rem] shrink-0 items-center justify-center border-r border-white/10 bg-white/5 px-3 text-sm font-semibold leading-none text-primary-200">
+                        {INDIA_PHONE_PREFIX}
+                      </span>
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        className="input-field min-w-0 flex-1 rounded-none border-0 bg-transparent focus:ring-0"
+                        placeholder="98765 43210"
+                        value={getIndianMobileDigits(form.phone)}
+                        onChange={e => handlePhoneChange(e.target.value)}
+                        maxLength={10}
+                      />
+                    </div>
                   </div>
                   <div>
-                    <label className="label">Department *</label>
-                    <select className="input-field" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} required>
-                      <option value="">Select Department</option>
-                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    <label className="label">Course *</label>
+                    <select className="input-field" value={form.course} onChange={e => handleCourseChange(e.target.value)} required>
+                      <option value="">Select Course</option>
+                      {Object.keys(COURSE_OPTIONS).map(course => <option key={course} value={course}>{course}</option>)}
                     </select>
                   </div>
+                  {(COURSE_OPTIONS[form.course] || []).length > 0 && (
+                    <div>
+                      <label className="label">Branch *</label>
+                      <select className="input-field" value={form.branch} onChange={e => handleBranchChange(e.target.value)} required>
+                        {(COURSE_OPTIONS[form.course] || []).map(branch => <option key={branch} value={branch}>{branch}</option>)}
+                      </select>
+                    </div>
+                  )}
                   <div>
                     <label className="label">Semester *</label>
                     <select className="input-field" value={form.semester} onChange={e => setForm({ ...form, semester: e.target.value })} required>
                       <option value="">Select Semester</option>
-                      {[1,2,3,4,5,6,7,8].map(s => <option key={s} value={s}>Semester {s}</option>)}
+                      {(COURSE_SEMESTERS[form.course] || []).map(s => <option key={s} value={s}>Semester {s}</option>)}
                     </select>
                   </div>
                   <div className="relative">
                     <label className="label">Password *</label>
                     <div className="relative">
-                      <input type={showPass ? 'text' : 'password'} className="input-field pr-12" placeholder="Min 6 characters" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required />
+                      <input type={showPass ? 'text' : 'password'} className="input-field pr-12" placeholder="Min 8 characters" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required />
                       <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
                         {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    {form.password.length > 0 && (
+                      <div className="mt-2 grid gap-1 text-[11px]">
+                        {passwordRules.map(rule => (
+                          <span key={rule.id} className={rule.test(form.password) ? 'text-emerald-300' : 'text-slate-500'}>
+                            {rule.test(form.password) ? '✓' : '•'} {rule.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="label">Confirm Password *</label>
@@ -468,8 +726,12 @@ export default function RegisterPage() {
                   </div>
                 </div>
                 <motion.button type="button" onClick={() => {
-                  if (!form.name || !form.email || !form.studentId || !form.department || !form.semester || !form.password) { toast.error('Please fill all required fields'); return; }
+                  if (!form.name || !form.email || !form.studentId || !form.course || !form.department || !form.semester || !form.password) { toast.error('Please fill all required fields'); return; }
+                  if ((COURSE_OPTIONS[form.course] || []).length > 0 && !form.branch) { toast.error('Please select your branch'); return; }
                   if (form.password !== form.confirmPassword) { toast.error('Passwords do not match'); return; }
+                  if (passwordIssues.length) { toast.error(`Password needs: ${passwordIssues.join(', ')}`); return; }
+                  if (form.phone && getIndianMobileDigits(form.phone).length !== 10) { toast.error('Enter a valid 10 digit phone number.'); return; }
+                  if (!otpVerified) { toast.error('Verify Gmail OTP first'); return; }
                   setStep(2);
                 }} className="btn-primary w-full mt-2" whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}>
                   Next: Upload Photo →
@@ -531,7 +793,7 @@ export default function RegisterPage() {
                       )}
                       {!cameraReady && !cameraError && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                          <SkeletonLine className="h-8 w-8 rounded-full" />
                         </div>
                       )}
                       {cameraError && (
@@ -599,12 +861,7 @@ export default function RegisterPage() {
                 <div className="flex gap-3 pt-2">
                   <button type="button" onClick={() => setStep(1)} className="btn-secondary flex-1">← Back</button>
                   <motion.button type="submit" disabled={loading || !photo} className={`btn-primary flex-1 ${loading ? 'action-pulse' : ''}`} whileHover={{ scale: loading ? 1 : 1.01 }} whileTap={{ scale: 0.98 }}>
-                    {loading ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Submitting...
-                      </span>
-                    ) : 'Submit Registration'}
+                    {loading ? <AuthButtonSkeleton /> : 'Submit Registration'}
                   </motion.button>
                 </div>
               </motion.div>
@@ -616,6 +873,7 @@ export default function RegisterPage() {
         <p className="text-center text-slate-400 text-sm mt-4">
           Already have an account? <Link to="/login" className="text-primary-400 hover:text-primary-300 font-medium">Sign In</Link>
         </p>
+        </div>
       </motion.div>
     </div>
   );

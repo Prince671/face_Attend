@@ -1,14 +1,39 @@
 const AuditLog = require('../models/AuditLog');
 const { applyDepartmentScope } = require('../utils/adminScope');
 
+const READ_ONLY_ACTIONS = [
+  'analytics.viewed',
+  'attendance.viewed',
+  'attendance.copied_viewed',
+  'page.opened',
+  'page.viewed',
+  'record.viewed',
+  'records.listed'
+];
+
 const getAuditLogs = async (req, res) => {
   try {
     const { action, entityType, actor, dateFrom, dateTo, limit = 100 } = req.query;
     const query = applyDepartmentScope({}, req.user, 'targetDepartment');
+    const currentActorId = req.user?._id?.toString();
 
-    if (action) query.action = action;
+    if (action) {
+      if (READ_ONLY_ACTIONS.includes(action)) {
+        return res.json({ success: true, logs: [] });
+      }
+      query.action = action;
+    } else {
+      query.action = { $nin: READ_ONLY_ACTIONS };
+    }
     if (entityType) query.entityType = entityType;
-    if (actor) query.actor = actor;
+    if (actor) {
+      if (currentActorId && actor === currentActorId) {
+        return res.json({ success: true, logs: [] });
+      }
+      query.actor = actor;
+    } else if (currentActorId) {
+      query.actor = { $ne: req.user._id };
+    }
     if (dateFrom || dateTo) {
       query.createdAt = {};
       if (dateFrom) query.createdAt.$gte = new Date(dateFrom);

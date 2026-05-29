@@ -1,15 +1,15 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   BookOpen, CheckCircle, TrendingUp, ChevronRight,
-  AlertCircle, Calendar, Clock, Video, CreditCard, Monitor
+  Calendar, Clock, Video, CreditCard, Monitor, ClipboardList, Trophy, FileText
 } from 'lucide-react';
-import { studentAPI } from '../../services/api';
+import { useGetStudentDashboardQuery, useGetStudentProgressQuery } from '../../services/dashboardApi';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
-import { PageLoader } from '../../components/LoadingStates';
+import { getAcademicLabel, getSemesterLabel } from '../../utils/academicLabels';
 import toast from 'react-hot-toast';
 
 const sortLecturesByDateAsc = (items = []) => [...items].sort((a, b) => {
@@ -18,27 +18,125 @@ const sortLecturesByDateAsc = (items = []) => [...items].sort((a, b) => {
   return String(a.startTime || '').localeCompare(String(b.startTime || ''));
 });
 
+const sortLecturesByDateDesc = (items = []) => [...items].sort((a, b) => {
+  const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+  if (dateDiff !== 0) return dateDiff;
+  return String(b.startTime || '').localeCompare(String(a.startTime || ''));
+});
+
+const SkeletonLine = ({ className = '' }) => <div className={`skeleton-shimmer rounded-full ${className}`} />;
+
+function StudentDashboardSkeleton() {
+  return (
+    <div className="space-y-4 sm:space-y-6">
+      <div className="space-y-2">
+        <SkeletonLine className="h-8 w-48 sm:w-64" />
+        <SkeletonLine className="h-4 w-56 sm:w-80" />
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <SkeletonLine className="h-8 w-28" />
+        <SkeletonLine className="h-8 w-24" />
+        <SkeletonLine className="h-8 w-24" />
+      </div>
+
+      {[0, 1].map(index => (
+        <div key={index} className="glass-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <SkeletonLine className="h-11 w-11 rounded-xl" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <SkeletonLine className="h-4 w-40" />
+              <SkeletonLine className="h-3 w-56 max-w-full" />
+            </div>
+          </div>
+          <SkeletonLine className="h-11 w-full rounded-xl sm:w-36" />
+        </div>
+      ))}
+
+      <div className="stats-strip student-dashboard-stats sm:grid-cols-3">
+        {[0, 1, 2].map(index => (
+          <div key={index} className="stat-tile">
+            <SkeletonLine className="h-12 w-12 rounded-2xl sm:h-16 sm:w-16" />
+            <div className="w-full space-y-2">
+              <SkeletonLine className="mx-auto h-3 w-24" />
+              <SkeletonLine className="mx-auto h-7 w-16" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="glass-card">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="space-y-2">
+            <SkeletonLine className="h-5 w-36" />
+            <SkeletonLine className="h-3 w-52" />
+          </div>
+          <SkeletonLine className="h-9 w-28 rounded-xl" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          {[0, 1, 2, 3, 4].map(index => (
+            <div key={index} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <SkeletonLine className="h-3 w-20" />
+              <SkeletonLine className="mt-3 h-6 w-10" />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          {[0, 1].map(column => (
+            <div key={column} className="space-y-2">
+              <SkeletonLine className="h-4 w-36" />
+              {[0, 1, 2].map(row => <SkeletonLine key={row} className="h-14 rounded-xl" />)}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+        {[0, 1].map(section => (
+          <div key={section} className="glass-card">
+            <div className="mb-4 flex items-center justify-between">
+              <SkeletonLine className="h-5 w-36" />
+              <SkeletonLine className="h-4 w-16" />
+            </div>
+            <div className="featured-lecture-rail lg:block lg:max-h-72 lg:space-y-3 lg:overflow-hidden">
+              {[0, 1, 2, 3].map(index => (
+                <div key={index} className="featured-lecture-card">
+                  <div className="flex items-start gap-3">
+                    <SkeletonLine className="mt-2 h-2 w-2" />
+                    <div className="flex-1 space-y-2">
+                      <SkeletonLine className="h-4 w-4/5" />
+                      <SkeletonLine className="h-3 w-2/3" />
+                      <div className="grid grid-cols-3 gap-1">
+                        <SkeletonLine className="h-8 rounded-lg" />
+                        <SkeletonLine className="h-8 rounded-lg" />
+                        <SkeletonLine className="h-8 rounded-lg" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function StudentDashboard() {
   const { user } = useAuth();
   const { socket } = useSocket();
-  const [dashboard, setDashboard] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  const fetchDashboard = useCallback(async () => {
-    try {
-      const r = await studentAPI.getDashboard();
-      setDashboard(r.data);
-    } catch (err) {
-      console.error('Dashboard fetch error:', err);
-      toast.error('Failed to load dashboard');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { data: dashboard, isLoading: dashboardLoading, error: dashboardError } = useGetStudentDashboardQuery(undefined, { refetchOnReconnect: true });
+  const { data: lmsProgressData, isLoading: lmsLoading } = useGetStudentProgressQuery(undefined, { refetchOnReconnect: true });
+  const lmsProgress = lmsProgressData?.progress || null;
+  const lectureRailRef = useRef(null);
+  const subjectRailRef = useRef(null);
+  const [activeLectureIndex, setActiveLectureIndex] = useState(0);
+  const [activeSubjectIndex, setActiveSubjectIndex] = useState(0);
 
   useEffect(() => {
-    fetchDashboard();
-  }, [fetchDashboard]);
+    if (dashboardError) toast.error('Failed to load dashboard');
+  }, [dashboardError]);
 
   // ✅ Real-time socket updates — refresh dashboard on any lecture event
   useEffect(() => {
@@ -46,25 +144,14 @@ export default function StudentDashboard() {
 
     const onNewLecture = (data) => {
       toast(`📚 New lecture added: ${data.lecture?.subject?.name || 'New Lecture'}`, { duration: 5000 });
-      fetchDashboard();
     };
-    const onAttendanceOpened = () => fetchDashboard();
-    const onAttendanceClosed = () => fetchDashboard();
-
     socket.on('new_lecture', onNewLecture);
-    socket.on('attendance_opened', onAttendanceOpened);
-    socket.on('attendance_closed', onAttendanceClosed);
-
     return () => {
       socket.off('new_lecture', onNewLecture);
-      socket.off('attendance_opened', onAttendanceOpened);
-      socket.off('attendance_closed', onAttendanceClosed);
     };
-  }, [socket, fetchDashboard]);
+  }, [socket]);
 
-  if (loading) return (
-    <PageLoader label="Loading student dashboard..." />
-  );
+  if (dashboardLoading || lmsLoading) return <StudentDashboardSkeleton />;
 
   const {
     subjectStats = [],
@@ -76,11 +163,46 @@ export default function StudentDashboard() {
 
   const openLectures = sortLecturesByDateAsc(dashboardOpenLectures);
   const upcomingLectures = sortLecturesByDateAsc(dashboardUpcomingLectures);
-  const allLectures = sortLecturesByDateAsc(dashboardAllLectures);
+  const allLectures = sortLecturesByDateDesc(dashboardAllLectures);
+  const updateActiveLecture = () => {
+    const rail = lectureRailRef.current;
+    if (!rail) return;
+    const center = rail.scrollLeft + rail.clientWidth / 2;
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    Array.from(rail.children).forEach((child, index) => {
+      const childCenter = child.offsetLeft + child.clientWidth / 2;
+      const distance = Math.abs(childCenter - center);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    setActiveLectureIndex(closestIndex);
+  };
+
+  const updateActiveSubject = () => {
+    const rail = subjectRailRef.current;
+    if (!rail) return;
+    const center = rail.scrollLeft + rail.clientWidth / 2;
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    Array.from(rail.children).forEach((child, index) => {
+      const childCenter = child.offsetLeft + child.clientWidth / 2;
+      const distance = Math.abs(childCenter - center);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    setActiveSubjectIndex(closestIndex);
+  };
 
   const totalAttended = subjectStats.reduce((a, s) => a + (s.attended || 0), 0);
   const totalLectures = subjectStats.reduce((a, s) => a + (s.totalLectures || 0), 0);
   const overallPct = totalLectures > 0 ? ((totalAttended / totalLectures) * 100).toFixed(1) : '0.0';
+  const academicLabel = getAcademicLabel(user);
+  const lmsSubjects = lmsProgress?.subjects || [];
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -88,19 +210,19 @@ export default function StudentDashboard() {
         <h1 className="font-display text-2xl font-bold text-white">
           Welcome, {user?.name?.split(' ')[0]}!
         </h1>
-        <p className="text-slate-400 mt-1">{user?.department} · Semester {user?.semester}</p>
+        <p className="text-slate-400 mt-1">{academicLabel} - {getSemesterLabel(user?.semester)}</p>
       </div>
 
       <AdminBreadcrumb items={[
-        { label: user?.department || 'Department' },
-        user?.semester && { label: `Semester ${user.semester}` },
+        { label: academicLabel },
+        user?.semester && { label: getSemesterLabel(user.semester) },
         { label: 'Dashboard' }
       ]} />
 
       {/* ✅ Open attendance alert — shown prominently */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div className="mobile-card-row flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-primary-600/20 border border-primary-500/30 flex items-center justify-center flex-shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-primary-600/20 border border-primary-500/30 flex items-center justify-center flex-shrink-0 sm:w-11 sm:h-11">
             <CreditCard className="w-4 h-4 sm:w-5 sm:h-5 text-primary-400" />
           </div>
           <div>
@@ -115,7 +237,7 @@ export default function StudentDashboard() {
 
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="glass-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div className="mobile-card-row flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center flex-shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 sm:w-11 sm:h-11">
             <Calendar className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400" />
           </div>
           <div>
@@ -150,7 +272,7 @@ export default function StudentDashboard() {
       )}
 
       {/* Stats row */}
-      <div className="grid grid-cols-3 gap-2 sm:gap-4">
+      <div className="stats-strip student-dashboard-stats sm:grid-cols-3">
         {[
           { icon: BookOpen, label: 'Enrolled Subjects', value: subjectStats.length, color: 'bg-primary-500/20 text-primary-400' },
           { icon: CheckCircle, label: 'Classes Attended', value: totalAttended, color: 'bg-emerald-500/20 text-emerald-400' },
@@ -162,18 +284,87 @@ export default function StudentDashboard() {
           <motion.div
             key={s.label}
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
-            className="glass-card mobile-card-row flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4"
+            className="stat-tile"
           >
-            <div className={`w-8 h-8 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${s.color}`}>
-              <s.icon className="w-4 h-4 sm:w-6 sm:h-6" />
+            <div className={`stat-tile-icon ${s.color}`}>
+              <s.icon className="w-5 h-5 sm:w-7 sm:h-7" />
             </div>
-            <div>
-              <p className="text-slate-400 text-[10px] leading-tight sm:text-sm">{s.label}</p>
-              <p className="text-base sm:text-2xl font-bold text-white font-display">{s.value}</p>
+            <div className="space-y-2">
+              <p className="stat-tile-label">{s.label}</p>
+              <p className="stat-tile-value">{s.value}</p>
             </div>
           </motion.div>
         ))}
       </div>
+
+      {lmsProgress && (
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-card">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 font-semibold text-white">
+              <ClipboardList className="h-5 w-5 text-primary-300" /> LMS Progress
+            </h2>
+            <Link to="/student/subjects" className="text-primary-400 hover:text-primary-300 text-sm flex items-center gap-1">
+              Classrooms <ChevronRight className="w-4 h-4" />
+            </Link>
+          </div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Pending Assignments</p>
+              <p className="mt-1 text-xl font-semibold text-amber-300">{lmsProgress.pendingAssignments || 0}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Pending Quizzes</p>
+              <p className="mt-1 text-xl font-semibold text-primary-300">{lmsProgress.pendingQuizzes || 0}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Materials</p>
+              <p className="mt-1 text-xl font-semibold text-white">{lmsProgress.materials || 0}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Quiz Attempts</p>
+              <p className="mt-1 text-xl font-semibold text-emerald-300">{lmsProgress.attempts || 0}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Open Doubts</p>
+              <p className="mt-1 text-xl font-semibold text-red-300">{lmsProgress.openDoubts || 0}</p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div>
+              <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-white"><FileText className="h-4 w-4 text-primary-300" /> Recent Materials</p>
+              <div className="space-y-2">
+                {(lmsProgress.recentMaterials || []).slice(0, 4).map(item => (
+                  <Link key={item._id} to={`/student/subjects/${item.subject?._id || item.subject}/classroom`} className="block rounded-xl border border-white/10 bg-white/[0.03] p-3 hover:bg-white/5">
+                    <p className="truncate text-sm font-medium text-white">{item.title}</p>
+                    <p className="mt-1 truncate text-xs text-slate-500">{item.subject?.code || item.subject?.name}</p>
+                  </Link>
+                ))}
+                {!(lmsProgress.recentMaterials || []).length && <p className="rounded-xl border border-dashed border-white/10 py-6 text-center text-sm text-slate-500">No materials yet.</p>}
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-white"><Trophy className="h-4 w-4 text-amber-300" /> Subject Tasks</p>
+              <div className="space-y-2">
+                {lmsSubjects.slice(0, 4).map(item => (
+                  <Link key={item.subject._id} to={`/student/subjects/${item.subject._id}/classroom`} className="block rounded-xl border border-white/10 bg-white/[0.03] p-3 hover:bg-white/5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-white">{item.subject.name}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.subject.code}</p>
+                      </div>
+                      <div className="flex flex-shrink-0 gap-2 text-xs">
+                        <span className="badge-warning">{item.pendingAssignments?.length || 0} assignments</span>
+                        <span className="badge-info">{item.pendingQuizzes?.length || 0} quizzes</span>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+                {!lmsSubjects.length && <p className="rounded-xl border border-dashed border-white/10 py-6 text-center text-sm text-slate-500">No LMS tasks yet.</p>}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
 
@@ -196,33 +387,34 @@ export default function StudentDashboard() {
               <p className="text-slate-600 text-xs mt-1">Admin will add lectures for your subjects</p>
             </div>
           ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {allLectures.map(lec => (
+            <div ref={lectureRailRef} onScroll={updateActiveLecture} className="featured-lecture-rail lg:max-h-72 lg:overflow-y-auto lg:pr-1">
+              {allLectures.map((lec, index) => (
                 <div key={lec._id}
-                  className="flex items-start gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/8 transition-colors">
+                  className={`featured-lecture-card ${index === activeLectureIndex ? 'is-active' : ''}`}>
+                  <div className="flex items-start gap-2 sm:gap-3">
                   <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
                     lec.attendanceOpen ? 'bg-emerald-400 animate-pulse' :
                     lec.status === 'completed' ? 'bg-primary-400' :
                     lec.status === 'ongoing' ? 'bg-yellow-400' : 'bg-slate-500'
                   }`} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{lec.title}</p>
-                    <p className="text-xs text-slate-400 flex items-center gap-1">
+                    <p className="line-clamp-2 text-[12px] font-semibold text-white sm:text-sm">{lec.title}</p>
+                    <p className="line-clamp-1 text-[10px] text-slate-400 flex items-center gap-1 sm:text-xs">
                       {lec.isLab && <Monitor className="w-3 h-3 text-primary-300" />}
                       {lec.subject?.name}{lec.isLab ? ` - ${lec.labNumber || 'LAB'}` : ''}
                     </p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="flex items-center gap-1 text-xs text-slate-500">
+                    <div className="mt-2 grid gap-1 text-[10px] text-slate-500 sm:flex sm:items-center sm:gap-2 sm:text-xs">
+                      <span className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
                         {new Date(lec.date).toLocaleDateString()}
                       </span>
-                      <span className="flex items-center gap-1 text-xs text-slate-500">
+                      <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {lec.startTime}
                       </span>
                     </div>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full flex-shrink-0 sm:text-xs ${
                     lec.attendanceOpen ? 'bg-emerald-500/20 text-emerald-300' :
                     lec.status === 'completed' ? 'bg-primary-500/20 text-primary-300' :
                     lec.status === 'ongoing' ? 'bg-yellow-500/20 text-yellow-300' :
@@ -230,6 +422,7 @@ export default function StudentDashboard() {
                   }`}>
                     {lec.attendanceOpen ? 'OPEN' : lec.status}
                   </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -242,36 +435,30 @@ export default function StudentDashboard() {
           className="glass-card"
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-white">Subject Attendance</h2>
+            <h2 className="font-semibold text-white flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-primary-400" /> My Subjects
+            </h2>
             <Link to="/student/subjects" className="text-primary-400 text-sm hover:text-primary-300 flex items-center gap-1">
               View all <ChevronRight className="w-4 h-4" />
             </Link>
           </div>
-          <div className="space-y-2 sm:space-y-4">
+            <div ref={subjectRailRef} onScroll={updateActiveSubject} className="subject-summary-list featured-lecture-rail lg:max-h-72 lg:overflow-y-auto lg:pr-1">
             {subjectStats.map(s => (
-              <Link key={s.subject._id} to={`/student/attendance/${s.subject._id}`}>
-                <div className="hover:bg-white/5 rounded-xl p-2 transition-colors cursor-pointer">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-sm font-medium text-white">{s.subject.name}</span>
-                    <span className={`text-sm font-semibold ${
-                      parseFloat(s.percentage) >= 75 ? 'text-emerald-400' : 'text-red-400'
-                    }`}>
-                      {s.percentage}%
-                    </span>
+              <Link key={s.subject._id} to={`/student/attendance/${s.subject._id}`} className={`subject-summary-card featured-lecture-card group ${subjectStats[activeSubjectIndex]?.subject?._id === s.subject._id ? 'is-active' : ''}`}>
+                <div className="flex items-start gap-2 sm:gap-3">
+                  <div className={`mt-2 h-2 w-2 flex-shrink-0 rounded-full ${Number(s.percentage) >= 75 ? 'bg-emerald-400' : Number(s.percentage) > 0 ? 'bg-amber-400' : 'bg-slate-500'}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="line-clamp-2 text-[12px] font-semibold text-white sm:text-sm">{s.subject.name}</span>
+                      {s.subject.code && <span className="badge-info flex-shrink-0">{s.subject.code}</span>}
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-1 text-center text-[10px] text-slate-400">
+                      <span className="rounded-lg bg-white/[0.04] px-1.5 py-1"><b className="block text-white">{s.totalLectures || 0}</b>Total</span>
+                      <span className="rounded-lg bg-emerald-500/10 px-1.5 py-1"><b className="block text-emerald-300">{s.attended || 0}</b>Present</span>
+                      <span className="rounded-lg bg-primary-500/10 px-1.5 py-1"><b className="block text-primary-300">{s.percentage}%</b>Rate</span>
+                    </div>
                   </div>
-                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(100, parseFloat(s.percentage))}%` }}
-                      transition={{ duration: 0.8, delay: 0.2 }}
-                      className={`h-full rounded-full ${
-                        parseFloat(s.percentage) >= 75 ? 'bg-emerald-500' : 'bg-red-500'
-                      }`}
-                    />
-                  </div>
-                  <p className="text-slate-500 text-xs mt-1">
-                    {s.attended}/{s.totalLectures} classes
-                  </p>
+                  <ChevronRight className="mt-1 h-4 w-4 flex-shrink-0 text-slate-500 transition-colors group-hover:text-primary-300" />
                 </div>
               </Link>
             ))}
@@ -291,9 +478,9 @@ export default function StudentDashboard() {
           className="glass-card"
         >
           <h2 className="font-semibold text-white mb-4">Recent Attendance</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="card-strip sm:grid-cols-2">
             {recentAttendance.slice(0, 6).map(a => (
-              <div key={a._id} className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors">
+              <div key={a._id} className="flex items-center gap-3 rounded-xl bg-white/[0.03] p-3 transition-colors hover:bg-white/5">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-white truncate">{a.lecture?.title}</p>
@@ -308,25 +495,6 @@ export default function StudentDashboard() {
         </motion.div>
       )}
 
-      {/* Low attendance warning */}
-      {subjectStats.some(s => parseFloat(s.percentage) < 75 && s.totalLectures > 0) && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold text-amber-300">Low Attendance Warning</p>
-            <p className="text-amber-400/80 text-sm mt-1">
-              You have low attendance in:{' '}
-              <span className="font-medium">
-                {subjectStats
-                  .filter(s => parseFloat(s.percentage) < 75 && s.totalLectures > 0)
-                  .map(s => s.subject.name)
-                  .join(', ')}
-              </span>
-              . Minimum 75% required to appear in exams.
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

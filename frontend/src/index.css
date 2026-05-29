@@ -10,12 +10,18 @@
   html {
     font-family: 'Outfit', sans-serif;
     overflow-x: hidden;
+    touch-action: pan-x pan-y;
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
   }
   
   body {
     @apply bg-slate-950 text-slate-100 antialiased;
     min-height: 100vh;
+    min-height: 100dvh;
     overflow-x: hidden;
+    background:
+      linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(2, 6, 23, 1) 44%, rgba(8, 13, 31, 1) 100%);
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
@@ -54,6 +60,10 @@
   a {
     overflow-wrap: anywhere;
   }
+
+  .font-emoji {
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', emoji, sans-serif;
+  }
 }
 
 html.light {
@@ -61,11 +71,17 @@ html.light {
 }
 
 html.light body {
-  background: #f8fafc;
+  background:
+    linear-gradient(135deg, #f8fafc 0%, #eef4ff 48%, #f9fbff 100%);
   color: #0f172a;
 }
 
 html.light .bg-slate-950,
+html.light .bg-slate-950\/70,
+html.light .bg-slate-950\/80,
+html.light .bg-slate-950\/85,
+html.light .bg-slate-950\/90,
+html.light .bg-slate-950\/95,
 html.light .from-slate-950,
 html.light .to-slate-950,
 html.light .via-slate-950 {
@@ -73,6 +89,9 @@ html.light .via-slate-950 {
 }
 
 html.light .bg-slate-900,
+html.light .bg-slate-900\/80,
+html.light .bg-slate-900\/90,
+html.light .bg-slate-900\/95,
 html.light .bg-slate-900\/60,
 html.light .bg-slate-900\/80,
 html.light .bg-slate-900\/95 {
@@ -123,6 +142,8 @@ html.light .hover\:text-white:hover {
 
 html.light .glass,
 html.light .glass-card {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.78)) !important;
   background-color: rgba(255, 255, 255, 0.82) !important;
   border-color: rgba(15, 23, 42, 0.12) !important;
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
@@ -179,6 +200,60 @@ html.light .theme-toggle {
 
 html.light .theme-toggle:hover {
   background-color: #ffffff !important;
+}
+
+.app-shell {
+  background:
+    linear-gradient(135deg, rgba(8, 13, 31, 0.96), rgba(2, 6, 23, 1) 54%, rgba(10, 15, 35, 0.98));
+}
+
+.app-main {
+  scroll-behavior: smooth;
+}
+
+.app-main > .page-enter {
+  max-width: 1480px;
+  margin-inline: auto;
+}
+
+.app-main > .page-enter:has(.student-rooms) {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+}
+
+.app-sidebar {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.88)) !important;
+  box-shadow: 18px 0 45px rgba(2, 6, 23, 0.18);
+}
+
+.app-sidebar nav {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+}
+
+.app-topbar {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.58)) !important;
+  box-shadow: 0 14px 38px rgba(2, 6, 23, 0.16);
+}
+
+html.light .app-shell {
+  background:
+    linear-gradient(135deg, #f8fafc 0%, #edf4ff 48%, #ffffff 100%);
+}
+
+html.light .app-sidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92)) !important;
+  box-shadow: 18px 0 45px rgba(15, 23, 42, 0.06);
+}
+
+html.light .app-topbar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.74)) !important;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.06);
 }
 
 .auth-login-page {
@@ -292,10 +367,15 @@ html.light .auth-login-secure {
 @layer components {
   .glass {
     @apply bg-white/5 backdrop-blur-xl border border-white/10;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.072), rgba(255, 255, 255, 0.032));
   }
   
   .glass-card {
     @apply glass rounded-2xl p-4 sm:p-6;
+    box-shadow:
+      0 18px 52px rgba(2, 6, 23, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.055);
     transition: transform 220ms ease, border-color 220ms ease, box-shadow 220ms ease, background-color 220ms ease;
   }
   
@@ -303,6 +383,7 @@ html.light .auth-login-secure {
     @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold px-4 sm:px-6 py-3 rounded-xl 
            transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
            hover:shadow-lg hover:shadow-primary-500/25 active:scale-95;
+    box-shadow: 0 12px 26px rgba(76, 110, 245, 0.18);
   }
   
   .btn-secondary {
@@ -324,6 +405,7 @@ html.light .auth-login-secure {
     @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white 
            placeholder-slate-400 focus:outline-none focus:border-primary-500 focus:ring-2 
            focus:ring-primary-500/20 transition-all duration-200;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
     color-scheme: dark;
     min-width: 0;
   }
@@ -349,18 +431,204 @@ html.light .auth-login-secure {
   .label {
     @apply block text-sm font-medium text-slate-300 mb-1.5;
   }
+
+  .register-compact .input-field {
+    @apply rounded-lg px-3 py-2.5 text-sm;
+  }
+
+  .register-compact .label {
+    @apply mb-1 text-xs;
+  }
+
+  .register-compact .btn-primary,
+  .register-compact .btn-secondary {
+    @apply rounded-lg px-4 py-2.5 text-sm;
+  }
+
+  .auth-login-compact .glass-card {
+    @apply rounded-xl p-4 sm:p-5;
+  }
+
+  .auth-login-compact .input-field {
+    @apply rounded-lg px-3 py-2.5 text-sm;
+  }
+
+  .auth-login-compact .label {
+    @apply mb-1 text-xs;
+  }
+
+  .auth-login-compact .btn-primary,
+  .auth-login-compact .btn-secondary {
+    @apply rounded-lg px-4 py-2.5 text-sm;
+  }
   
   .sidebar-item {
     @apply flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:text-white 
            hover:bg-white/10 transition-all duration-200 cursor-pointer;
+    min-height: 2.75rem;
   }
   
   .sidebar-item.active {
     @apply bg-primary-600/20 text-primary-400 border border-primary-500/30;
+    box-shadow: inset 3px 0 0 rgba(116, 143, 252, 0.78);
   }
   
   .stat-card {
     @apply glass-card flex items-center gap-4;
+  }
+
+  .stats-strip {
+    @apply flex gap-3 overflow-x-auto pb-2 sm:grid sm:overflow-visible sm:pb-0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .card-strip {
+    @apply flex gap-3 overflow-x-auto pb-2 sm:grid sm:overflow-visible sm:pb-0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .stats-strip::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .card-strip::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .stats-strip::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .card-strip::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .stats-strip::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+  }
+
+  .card-strip::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+  }
+
+  .card-strip > * {
+    @apply min-w-[13.5rem] flex-shrink-0 sm:min-w-0;
+  }
+
+  .compact-card {
+    @apply p-3 sm:p-5;
+  }
+
+  .folder-choice-card {
+    @apply glass-card flex items-start gap-3 rounded-xl p-4 text-left border border-transparent transition-all hover:border-primary-500/35;
+    min-height: 6.5rem;
+  }
+
+  .folder-choice-icon {
+    @apply flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border;
+  }
+
+  .app-modal-backdrop {
+    @apply fixed inset-0 z-[90] grid min-h-dvh place-items-center overflow-y-auto bg-slate-950/75 p-4 backdrop-blur-sm;
+  }
+
+  .app-modal-panel {
+    @apply w-full max-w-md;
+  }
+
+  .lms-card-rail {
+    @apply -mx-1 overflow-x-auto pb-2 sm:mx-0 sm:overflow-visible;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.32) transparent;
+  }
+
+  .lms-card-track {
+    @apply grid auto-cols-[calc(50%-0.375rem)] grid-flow-col gap-3 px-1 sm:grid-flow-row sm:auto-cols-auto sm:grid-cols-2 sm:px-0 lg:grid-cols-3;
+  }
+
+  .quiz-card-track {
+    @apply gap-4 sm:gap-4;
+  }
+
+  .lms-compact-card {
+    @apply rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm sm:rounded-2xl sm:p-4 sm:text-base;
+  }
+
+  .mobile-hold-tooltip {
+    @apply pointer-events-none fixed z-[120] -translate-x-1/2 -translate-y-full rounded-lg border border-white/10 bg-slate-950/95 px-3 py-1.5 text-xs font-medium text-white shadow-2xl shadow-black/40 backdrop-blur-md;
+  }
+
+  .three-card-grid {
+    @apply grid grid-cols-3 gap-2 sm:grid-cols-2 lg:grid-cols-3 sm:gap-3;
+  }
+
+  .student-subject-grid {
+    @apply gap-3 sm:gap-3;
+  }
+
+  .three-card-list {
+    @apply grid grid-cols-3 gap-2 lg:block lg:space-y-3;
+  }
+
+  .subject-summary-list {
+    @apply max-h-[19.25rem] overflow-y-auto pr-1;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .subject-summary-list::-webkit-scrollbar,
+  .low-attendance-scroll-grid::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .subject-summary-list::-webkit-scrollbar-track,
+  .low-attendance-scroll-grid::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .subject-summary-list::-webkit-scrollbar-thumb,
+  .low-attendance-scroll-grid::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+  }
+
+  .subject-summary-card {
+    @apply block transition-colors hover:bg-white/[0.06];
+  }
+
+  .low-attendance-scroll-grid {
+    @apply grid max-h-[16.5rem] grid-cols-2 gap-2 overflow-y-auto pr-1 lg:grid-cols-4;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .low-attendance-student-card {
+    @apply min-h-[4.55rem] rounded-xl bg-black/20 p-2.5;
+  }
+
+  .stat-tile {
+    @apply glass-card flex min-w-[8.25rem] flex-shrink-0 flex-col items-center justify-center gap-3 text-center sm:min-w-0;
+    min-height: 10rem;
+  }
+
+  .stat-tile-icon {
+    @apply flex h-14 w-14 items-center justify-center rounded-2xl sm:h-16 sm:w-16;
+  }
+
+  .stat-tile-label {
+    @apply text-xs font-medium leading-tight text-slate-300 sm:text-sm;
+  }
+
+  .stat-tile-value {
+    @apply font-display text-2xl font-bold leading-none text-white sm:text-3xl;
+  }
+
+  .student-dashboard-stats .stat-tile {
+    min-width: 7rem;
   }
   
   .badge {
@@ -372,10 +640,251 @@ html.light .auth-login-secure {
   .badge-danger { @apply badge bg-red-500/20 text-red-400 border border-red-500/30; }
   .badge-info { @apply badge bg-blue-500/20 text-blue-400 border border-blue-500/30; }
   .badge-neutral { @apply badge bg-slate-500/20 text-slate-400 border border-slate-500/30; }
+
+  .table-scroll {
+    @apply w-full overflow-x-auto overscroll-x-contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .table-scroll::-webkit-scrollbar {
+    height: 7px;
+  }
+
+  .table-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .table-scroll::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+  }
+
+  .data-table {
+    @apply w-full;
+    min-width: 760px;
+    table-layout: fixed;
+  }
+
+  .data-table th,
+  .data-table td {
+    @apply align-middle;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .data-table .cell-wrap {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .data-table .cell-clip {
+    @apply block min-w-0 truncate;
+  }
+
+  .data-table td > p,
+  .data-table td > span:not(.badge):not(.badge-success):not(.badge-warning):not(.badge-danger):not(.badge-info):not(.badge-neutral) {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .row-actions {
+    @apply flex items-center justify-end gap-2;
+    min-width: max-content;
+  }
+
+  .icon-action {
+    @apply inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .teacher-subject-action {
+    @apply flex w-full min-w-0 items-center justify-end gap-2;
+  }
+
+  .teacher-subject-select {
+    @apply h-9 min-w-0 flex-1 text-xs;
+    max-width: 13rem;
+  }
+
+  .teacher-subject-button {
+    @apply inline-flex h-9 flex-shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .teacher-student-overview {
+    @apply -mx-1 flex gap-3 overflow-x-auto px-1 pb-2 sm:mx-0 sm:grid sm:grid-cols-4 sm:overflow-visible sm:px-0 sm:pb-0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .teacher-student-overview::-webkit-scrollbar,
+  .teacher-student-filter-rail::-webkit-scrollbar,
+  .teacher-student-meta-rail::-webkit-scrollbar,
+  .teacher-student-action-strip::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .teacher-student-overview::-webkit-scrollbar-track,
+  .teacher-student-filter-rail::-webkit-scrollbar-track,
+  .teacher-student-meta-rail::-webkit-scrollbar-track,
+  .teacher-student-action-strip::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .teacher-student-overview::-webkit-scrollbar-thumb,
+  .teacher-student-filter-rail::-webkit-scrollbar-thumb,
+  .teacher-student-meta-rail::-webkit-scrollbar-thumb,
+  .teacher-student-action-strip::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.28);
+  }
+
+  .teacher-student-overview-tile {
+    @apply min-w-[8.5rem] rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3;
+    box-shadow: 0 14px 36px rgba(2, 6, 23, 0.24);
+  }
+
+  .teacher-student-overview-tile span {
+    @apply block text-[11px] uppercase tracking-wide text-slate-500;
+  }
+
+  .teacher-student-overview-tile strong {
+    @apply mt-1 block font-display text-2xl leading-none text-white;
+  }
+
+  .teacher-student-filter-rail {
+    @apply -mx-1 flex gap-3 overflow-x-auto px-1 pb-2 sm:mx-0 sm:px-0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .teacher-student-mobile-list {
+    @apply space-y-3 p-2 sm:p-3;
+  }
+
+  .teacher-student-mobile-card {
+    @apply rounded-xl border border-white/10 bg-slate-950/35 p-3;
+    box-shadow: 0 14px 36px rgba(2, 6, 23, 0.24);
+  }
+
+  .teacher-student-mobile-card-head {
+    @apply flex min-w-0 items-start gap-3;
+  }
+
+  .teacher-student-avatar {
+    @apply h-11 w-11 flex-shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/10;
+  }
+
+  .teacher-student-name {
+    @apply max-w-[11rem] truncate text-sm font-semibold text-white;
+  }
+
+  .teacher-student-email {
+    @apply max-w-[12rem] truncate text-[11px] text-slate-500;
+  }
+
+  .teacher-student-meta-rail {
+    @apply mt-2 flex max-w-full gap-1.5 overflow-x-auto pb-1;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .teacher-student-meta-rail span {
+    @apply flex-shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300;
+  }
+
+  .teacher-student-meta-rail span:first-child {
+    @apply font-mono text-primary-200;
+  }
+
+  .teacher-student-action-strip {
+    @apply mt-3 overflow-x-auto pb-1;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .student-list-block {
+    @apply max-h-[360px];
+  }
+
+  .student-list-scroll {
+    max-height: 360px;
+    overflow-y: auto;
+  }
+
+  .teacher-subject-action-mobile {
+    @apply min-w-max flex-row items-center justify-start;
+  }
+
+  .teacher-subject-action-mobile .teacher-subject-select,
+  .teacher-subject-action-mobile .teacher-subject-button {
+    @apply flex-shrink-0;
+    max-width: none;
+  }
+
+  .teacher-subject-action-mobile .teacher-subject-select {
+    width: 11.5rem;
+  }
+
+  .teacher-subject-action-mobile .teacher-subject-button {
+    width: 8.75rem;
+  }
+
+  .teacher-students-page .student-list-block {
+    @apply border-white/10 bg-white/[0.025];
+  }
+
+  .teacher-student-table {
+    min-width: 56rem;
+  }
+
+  .teacher-student-table th {
+    @apply py-3 text-[11px] uppercase tracking-wide;
+  }
+
+  .teacher-student-table td {
+    @apply py-3;
+  }
+
+  .teacher-student-table .cell-clip {
+    @apply text-xs;
+  }
+
+  .teacher-student-table td p {
+    @apply text-[11px];
+  }
+
+  .teacher-student-table .badge {
+    @apply px-2 py-0.5 text-[10px];
+  }
+
+  .teacher-student-table .teacher-subject-select {
+    @apply h-8 text-[11px];
+    max-width: 11.75rem;
+  }
+
+  .teacher-student-table .teacher-subject-button {
+    @apply h-8 px-2 text-[11px];
+  }
+
+  .teacher-student-table .icon-action {
+    @apply h-8 w-8;
+  }
 }
 
 .glass-card:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  border-color: rgba(116, 143, 252, 0.26);
+  box-shadow:
+    0 22px 60px rgba(2, 6, 23, 0.34),
+    0 0 0 1px rgba(116, 143, 252, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.glass-card:active {
+  transform: translateY(0) scale(0.995);
 }
 
 .btn-primary,
@@ -411,12 +920,299 @@ html.light .auth-login-secure {
   transform: translateY(-1px);
 }
 
+.sidebar-item,
+.stat-card,
+.stat-tile,
+.compact-card,
+.badge,
+.input-field {
+  will-change: transform, border-color, box-shadow, background-color;
+}
+
+.sidebar-item:active,
+.compact-card:active,
+.stat-card:active,
+.stat-tile:active {
+  transform: scale(0.985);
+}
+
+.sidebar-item:hover svg,
+.btn-primary:hover svg,
+.btn-secondary:hover svg,
+.btn-danger:hover svg,
+.btn-success:hover svg {
+  animation: iconNudge 420ms ease;
+}
+
+.animated-surface {
+  position: relative;
+  overflow: hidden;
+}
+
+.animated-surface::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--x, 50%) var(--y, 0%), rgba(116, 143, 252, 0.18), transparent 36%);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.animated-surface:hover::before {
+  opacity: 1;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(116, 143, 252, 0.78);
+  outline-offset: 2px;
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: 0.85rem;
+  border: 0;
+  border-radius: 0.65rem;
+  background: rgba(116, 143, 252, 0.22);
+  color: #e0e7ff;
+  padding: 0.5rem 0.8rem;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: rgba(116, 143, 252, 0.34);
+  color: #ffffff;
+}
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+thead {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+th {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+tbody tr {
+  transition: background-color 160ms ease;
+}
+
+tbody tr:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+html.light input[type="file"]::file-selector-button {
+  background: rgba(37, 99, 235, 0.10);
+  color: #1d4ed8;
+}
+
+html.light input[type="file"]::file-selector-button:hover {
+  background: rgba(37, 99, 235, 0.16);
+}
+
+html.light thead {
+  background: rgba(15, 23, 42, 0.035);
+}
+
+html.light th {
+  color: #475569;
+}
+
+html.light tbody tr:hover {
+  background: rgba(15, 23, 42, 0.035);
+}
+
 .page-enter {
   animation: pageRise 260ms ease both;
 }
 
 .action-pulse {
   animation: actionPulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  animation: skeletonShimmer 1.25s ease-in-out infinite;
+}
+
+html.light .skeleton-shimmer {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+html.light .skeleton-shimmer::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.72), transparent);
+}
+
+.mobile-bottom-nav {
+  box-shadow: 0 -18px 45px rgba(2, 6, 23, 0.38);
+  padding-bottom: max(0.45rem, env(safe-area-inset-bottom));
+}
+
+.mobile-bottom-nav a {
+  min-height: 3.15rem;
+}
+
+.mobile-bottom-nav a[aria-current="page"] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.route-loading-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 80;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.route-loading-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.95), transparent);
+  animation: routeLoad 820ms ease-in-out infinite;
+}
+
+.route-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.46);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: wait;
+}
+
+.route-loading-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(165, 180, 252);
+}
+
+html.light .route-loading-overlay {
+  background: rgba(248, 250, 252, 0.5);
+}
+
+html.light .route-loading-card {
+  color: rgb(79, 70, 229);
+}
+
+.notification-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.notification-card .notification-body {
+  min-width: 0;
+}
+
+.notification-card .notification-title {
+  font-size: 0.9rem;
+  line-height: 1.2rem;
+}
+
+.notification-card .notification-message {
+  font-size: 0.82rem;
+  line-height: 1.15rem;
+}
+
+.teacher-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.teacher-card {
+  min-width: 0;
+  height: 100%;
+}
+
+.featured-lecture-rail {
+  display: flex;
+  gap: 0.75rem;
+  margin-inline: -0.65rem;
+  padding: 0 0.65rem 0.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.30) transparent;
+}
+
+.featured-lecture-card {
+  flex: 0 0 42%;
+  min-width: 8.75rem;
+  min-height: 9.8rem;
+  scroll-snap-align: center;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0.75rem;
+  opacity: 0.72;
+  transform: scale(0.94);
+  transition: flex-basis 260ms ease, opacity 260ms ease, transform 260ms ease, border-color 260ms ease, background-color 260ms ease;
+}
+
+.featured-lecture-card.is-active {
+  flex-basis: 76%;
+  opacity: 1;
+  transform: scale(1);
+  border-color: rgba(129, 140, 248, 0.36);
+  background: linear-gradient(145deg, rgba(99, 102, 241, 0.16), rgba(255, 255, 255, 0.055));
+}
+
+.subject-card {
+  min-width: 0;
+  min-height: 8.75rem;
+}
+
+.stats-strip,
+.card-strip {
+  scroll-snap-type: x proximity;
+}
+
+.stats-strip > *,
+.card-strip > * {
+  scroll-snap-align: start;
+}
+
+html.light .mobile-bottom-nav {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+  box-shadow: 0 -18px 45px rgba(15, 23, 42, 0.08);
 }
 
 @keyframes pageRise {
@@ -426,7 +1222,7 @@ html.light .auth-login-secure {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -436,6 +1232,80 @@ html.light .auth-login-secure {
   }
   50% {
     box-shadow: 0 0 0 6px rgba(79, 70, 229, 0);
+  }
+}
+
+@keyframes skeletonShimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes iconNudge {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  45% {
+    transform: translateY(-1px) rotate(-4deg);
+  }
+  70% {
+    transform: translateY(0) rotate(3deg);
+  }
+}
+
+@keyframes routeLoad {
+  0% {
+    transform: translateX(-70%);
+  }
+  100% {
+    transform: translateX(240%);
+  }
+}
+
+@media (min-width: 641px) {
+  .notification-list {
+    gap: 0.75rem;
+  }
+
+  .teacher-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .featured-lecture-rail {
+    margin-inline: 0;
+    padding-inline: 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .teacher-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .featured-lecture-card,
+  .featured-lecture-card.is-active {
+    flex-basis: 15rem;
+    min-height: auto;
+    transform: none;
+    opacity: 1;
+  }
+
+  .featured-lecture-rail {
+    display: block;
+    max-height: 18rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 0.25rem;
+    scroll-snap-type: none;
+  }
+
+  .featured-lecture-card {
+    width: 100%;
+    margin-bottom: 0.75rem;
+  }
+
+  .featured-lecture-card:last-child {
+    margin-bottom: 0;
   }
 }
 
@@ -452,6 +1322,112 @@ html.light .auth-login-secure {
   .glass-card:hover,
   .input-field:focus {
     transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .glass-card:hover,
+  .input-field:focus {
+    transform: none;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-success {
+    padding: 0.625rem 0.875rem;
+    min-height: 2.5rem;
+    border-radius: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.15;
+  }
+
+  .input-field {
+    padding: 0.625rem 0.75rem;
+    border-radius: 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .label {
+    font-size: 0.78rem;
+  }
+
+  .badge {
+    padding: 0.125rem 0.45rem;
+    font-size: 0.68rem;
+    line-height: 1rem;
+  }
+
+  .glass-card {
+    border-radius: 0.875rem;
+  }
+
+  .stat-tile {
+    min-width: 7.75rem;
+    min-height: 8.25rem;
+    padding: 0.875rem;
+    border-radius: 1rem;
+  }
+
+  .card-strip > * {
+    min-width: 12.75rem;
+  }
+
+  .compact-card {
+    padding: 0.875rem;
+  }
+
+  .three-card-grid .glass-card,
+  .three-card-list .glass-card {
+    padding: 0.65rem;
+    border-radius: 0.85rem;
+  }
+
+  .stat-tile-icon {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 0.875rem;
+  }
+
+  .stat-tile-label {
+    font-size: 0.76rem;
+  }
+
+  .stat-tile-value {
+    font-size: 1.55rem;
+  }
+
+  .student-dashboard-stats .stat-tile {
+    min-width: 6.25rem;
+    min-height: 7rem;
+    gap: 0.55rem;
+    padding: 0.7rem;
+  }
+
+  .student-dashboard-stats .stat-tile-icon {
+    width: 2.45rem;
+    height: 2.45rem;
+    border-radius: 0.8rem;
+  }
+
+  .student-dashboard-stats .stat-tile-label {
+    font-size: 0.68rem;
+    line-height: 0.95rem;
+  }
+
+  .student-dashboard-stats .stat-tile-value {
+    font-size: 1.35rem;
+  }
+
+  h1.font-display.text-2xl,
+  .font-display.text-2xl {
+    font-size: 1.25rem;
+    line-height: 1.65rem;
+  }
+
+  .font-display.text-3xl {
+    font-size: 1.55rem;
+    line-height: 1.95rem;
   }
 }
 
@@ -746,6 +1722,18 @@ html.light .auth-login-secure {
     padding: 0.65rem;
   }
 
+  .app-sidebar {
+    width: min(13.25rem, 78vw) !important;
+  }
+
+  .app-sidebar nav {
+    padding: 0.6rem !important;
+  }
+
+  .app-sidebar [class*="border-b"] {
+    padding: 0.85rem !important;
+  }
+
   .input-field {
     font-size: 16px;
     padding: 0.7rem 0.85rem;
@@ -759,15 +1747,126 @@ html.light .auth-login-secure {
   .sidebar-item {
     padding: 0.7rem 0.85rem;
     border-radius: 0.85rem;
+    gap: 0.7rem;
+    min-height: 2.55rem;
+    font-size: 0.86rem;
   }
 
-  table {
-    min-width: 680px;
+  .sidebar-item svg {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  .three-card-grid,
+  .three-card-list {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.7rem !important;
+  }
+
+  .student-subject-grid {
+    gap: 0.9rem !important;
+  }
+
+  .student-subject-grid .subject-card {
+    min-height: 7.6rem;
+  }
+
+  .three-card-list > *,
+  .three-card-grid > * {
+    min-width: 0 !important;
+  }
+
+  .notification-list {
+    gap: 0.55rem;
+  }
+
+  .notification-card {
+    padding: 0.65rem !important;
+  }
+
+  .notification-card .notification-row {
+    gap: 0.55rem;
+  }
+
+  .notification-card .notification-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.65rem;
+  }
+
+  .notification-card .notification-title {
+    font-size: 0.78rem;
+    line-height: 1rem;
+  }
+
+  .notification-card .notification-message {
+    font-size: 0.72rem;
+    line-height: 0.98rem;
+  }
+
+  .notification-card .notification-actions {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .teacher-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .teacher-card {
+    padding: 0.7rem !important;
+  }
+
+  .teacher-card .teacher-card-content {
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .teacher-card .teacher-card-avatar {
+    width: 2.8rem;
+    height: 2.8rem;
+  }
+
+  .teacher-card .teacher-card-name {
+    font-size: 0.78rem;
+    line-height: 1rem;
+  }
+
+  .teacher-card .teacher-card-email {
+    font-size: 0.66rem;
+    line-height: 0.9rem;
+  }
+
+  .subject-card {
+    min-height: 9.25rem;
+    padding: 0.72rem !important;
+  }
+
+  .subject-card-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.7rem;
+  }
+
+  .subject-card-title {
+    font-size: 0.76rem !important;
+    line-height: 1rem !important;
+  }
+
+  .table-scroll {
+    margin-inline: -0.65rem;
+    padding-inline: 0.65rem;
+  }
+
+  .data-table {
+    min-width: 780px;
     font-size: 0.8125rem;
   }
 
-  th,
-  td {
+  .data-table th,
+  .data-table td {
     padding-left: 0.75rem !important;
     padding-right: 0.75rem !important;
   }
@@ -781,34 +1880,6 @@ html.light .auth-login-secure {
 
   .mobile-icon-btn .mobile-label {
     display: none;
-  }
-
-  .mobile-bottom-nav {
-    padding-bottom: max(0.45rem, env(safe-area-inset-bottom));
-  }
-
-  .mobile-bottom-nav > div {
-    gap: 0.15rem;
-    padding-left: 0.35rem;
-    padding-right: 0.35rem;
-    padding-top: 0.35rem;
-  }
-
-  .mobile-bottom-nav a {
-    min-height: 3.15rem;
-    padding: 0.35rem 0.15rem;
-    border-radius: 0.75rem;
-  }
-
-  .mobile-bottom-nav svg {
-    width: 1rem;
-    height: 1rem;
-  }
-
-  .mobile-bottom-nav span {
-    max-width: 100%;
-    font-size: 0.55rem;
-    line-height: 0.72rem;
   }
 
   .badge {
@@ -836,10 +1907,466 @@ html.light .auth-login-secure {
 }
 
 /* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+
+/* Final theme and mobile-density polish */
+html.light {
+  scrollbar-color: rgba(71, 85, 105, 0.28) transparent;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.24);
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.36);
+}
+
+html.light .text-slate-50,
+html.light .text-slate-100,
+html.light .text-slate-200,
+html.light .text-slate-300,
+html.light .text-white {
+  color: #0f172a !important;
+}
+
+html.light .text-slate-400 {
+  color: #475569 !important;
+}
+
+html.light .text-slate-500,
+html.light .text-slate-600 {
+  color: #334155 !important;
+}
+
+html.light .text-primary-100,
+html.light .text-primary-200,
+html.light .text-primary-300,
+html.light .text-primary-400,
+html.light .text-blue-300,
+html.light .text-blue-400 {
+  color: #1d4ed8 !important;
+}
+
+html.light .text-emerald-300,
+html.light .text-emerald-400 {
+  color: #047857 !important;
+}
+
+html.light .text-amber-300,
+html.light .text-amber-400 {
+  color: #b45309 !important;
+}
+
+html.light .text-red-300,
+html.light .text-red-400 {
+  color: #dc2626 !important;
+}
+
+html.light .bg-primary-500\/10,
+html.light .bg-primary-500\/15,
+html.light .bg-primary-500\/20,
+html.light .bg-blue-500\/10,
+html.light .bg-blue-500\/20 {
+  background-color: rgba(37, 99, 235, 0.10) !important;
+}
+
+html.light .bg-emerald-500\/10,
+html.light .bg-emerald-500\/20 {
+  background-color: rgba(5, 150, 105, 0.10) !important;
+}
+
+html.light .bg-amber-500\/10,
+html.light .bg-amber-500\/20 {
+  background-color: rgba(217, 119, 6, 0.12) !important;
+}
+
+html.light .bg-red-500\/10,
+html.light .bg-red-500\/20 {
+  background-color: rgba(220, 38, 38, 0.10) !important;
+}
+
+html.light .border-primary-500\/20,
+html.light .border-primary-500\/30,
+html.light .border-blue-500\/30 {
+  border-color: rgba(37, 99, 235, 0.28) !important;
+}
+
+html.light .border-emerald-400\/20,
+html.light .border-emerald-500\/30 {
+  border-color: rgba(5, 150, 105, 0.24) !important;
+}
+
+html.light .border-amber-400\/20,
+html.light .border-amber-500\/30 {
+  border-color: rgba(217, 119, 6, 0.28) !important;
+}
+
+html.light .border-red-400\/20,
+html.light .border-red-500\/30 {
+  border-color: rgba(220, 38, 38, 0.24) !important;
+}
+
+html.light .badge-neutral {
+  background-color: rgba(71, 85, 105, 0.08) !important;
+  border-color: rgba(71, 85, 105, 0.18) !important;
+  color: #334155 !important;
+}
+
+html.light .badge-info {
+  background-color: rgba(37, 99, 235, 0.10) !important;
+  border-color: rgba(37, 99, 235, 0.24) !important;
+  color: #1d4ed8 !important;
+}
+
+html.light .badge-success {
+  background-color: rgba(5, 150, 105, 0.10) !important;
+  border-color: rgba(5, 150, 105, 0.24) !important;
+  color: #047857 !important;
+}
+
+html.light .badge-warning {
+  background-color: rgba(217, 119, 6, 0.12) !important;
+  border-color: rgba(217, 119, 6, 0.26) !important;
+  color: #92400e !important;
+}
+
+html.light .badge-danger {
+  background-color: rgba(220, 38, 38, 0.10) !important;
+  border-color: rgba(220, 38, 38, 0.24) !important;
+  color: #b91c1c !important;
+}
+
+html.light .app-sidebar svg,
+html.light .app-topbar svg,
+html.light .glass-card svg,
+html.light .compact-card svg,
+html.light .stat-card svg,
+html.light .lms-compact-card svg {
+  opacity: 1;
+}
+
+html.light .app-sidebar .sidebar-item:not(.active) svg,
+html.light .app-topbar button svg {
+  color: #334155;
+}
+
+@media (max-width: 640px) {
+  html {
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+  }
+
+  .page-enter {
+    font-size: 0.86rem;
+    line-height: 1.35;
+  }
+
+  .page-enter > div,
+  .app-main > .page-enter {
+    min-width: 0;
+  }
+
+  h1.text-2xl,
+  h1.text-3xl,
+  .font-display.text-2xl,
+  .font-display.text-3xl {
+    font-size: 1.18rem !important;
+    line-height: 1.48rem !important;
+  }
+
+  h2.text-xl,
+  .font-display.text-xl {
+    font-size: 1rem !important;
+    line-height: 1.35rem !important;
+  }
+
+  h3,
+  .text-lg {
+    font-size: 0.94rem !important;
+    line-height: 1.25rem !important;
+  }
+
+  p,
+  label,
+  button,
+  a,
+  td,
+  th {
+    line-height: 1.35;
+  }
+
+  .glass-card,
+  .compact-card,
+  .stat-card,
+  .lms-compact-card,
+  .teacher-card,
+  .notification-card,
+  .teacher-student-mobile-card {
+    border-radius: 0.72rem !important;
+    padding: 0.6rem !important;
+  }
+
+  .lms-compact-card,
+  .compact-card {
+    font-size: 0.82rem;
+  }
+
+  .stat-card,
+  .mobile-card-row,
+  .notification-card .notification-row,
+  .teacher-card .teacher-card-content {
+    gap: 0.55rem !important;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-success,
+  .input-field,
+  select.input-field {
+    border-radius: 0.68rem !important;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-success {
+    min-height: 2.25rem !important;
+    padding: 0.45rem 0.65rem !important;
+    font-size: 0.78rem !important;
+  }
+
+  .input-field {
+    padding: 0.58rem 0.7rem !important;
+  }
+
+  .badge,
+  .badge-info,
+  .badge-success,
+  .badge-warning,
+  .badge-danger,
+  .badge-neutral {
+    padding: 0.08rem 0.36rem !important;
+    font-size: 0.58rem !important;
+    line-height: 0.9rem !important;
+  }
+
+  .page-enter svg:not(.student-id-card svg),
+  .glass-card svg,
+  .compact-card svg,
+  .lms-compact-card svg,
+  .stat-card svg,
+  .sidebar-item svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .icon-action,
+  .mobile-icon-btn {
+    width: 2.15rem !important;
+    min-width: 2.15rem !important;
+    height: 2.15rem !important;
+  }
+
+  .stat-tile {
+    min-width: 6.6rem !important;
+    min-height: 6.75rem !important;
+    gap: 0.45rem !important;
+    padding: 0.58rem !important;
+    border-radius: 0.75rem !important;
+  }
+
+  .stat-tile-icon,
+  .subject-card-icon,
+  .notification-card .notification-icon,
+  .teacher-card .teacher-card-avatar,
+  .mobile-card-row > [class*="w-12"],
+  .mobile-card-row > [class*="w-11"],
+  .mobile-card-row > [class*="w-10"] {
+    width: 1.9rem !important;
+    height: 1.9rem !important;
+    border-radius: 0.62rem !important;
+  }
+
+  .stat-tile-label,
+  .notification-card .notification-message,
+  .teacher-card .teacher-card-email,
+  .text-xs {
+    font-size: 0.68rem !important;
+    line-height: 0.95rem !important;
+  }
+
+  .stat-tile-value {
+    font-size: 1.18rem !important;
+    line-height: 1.35rem !important;
+  }
+
+  .three-card-grid,
+  .three-card-list,
+  .teacher-grid {
+    gap: 0.55rem !important;
+  }
+
+  .student-subject-grid {
+    gap: 0.72rem !important;
+  }
+
+  .subject-card {
+    min-height: 7.15rem !important;
+  }
+
+  .subject-card-title,
+  .notification-card .notification-title,
+  .teacher-card .teacher-card-name {
+    font-size: 0.72rem !important;
+    line-height: 0.95rem !important;
+  }
+
+  .lms-card-rail {
+    padding-bottom: 0.25rem !important;
+  }
+
+  .lms-card-track,
+  .quiz-card-track {
+    gap: 0.7rem !important;
+  }
+
+  .table-scroll {
+    scrollbar-width: thin;
+  }
+
+  .app-sidebar {
+    width: min(12.25rem, 76vw) !important;
+  }
+
+  .sidebar-item {
+    min-height: 2.25rem !important;
+    gap: 0.55rem !important;
+    padding: 0.55rem 0.7rem !important;
+    border-radius: 0.68rem !important;
+    font-size: 0.78rem !important;
+  }
+}
+
+/* WhatsApp-like chat room surface */
+.student-rooms {
+  box-shadow: 0 24px 70px rgba(2, 6, 23, 0.34);
+  border-radius: 0 !important;
+}
+
+.student-rooms aside {
+  background: rgba(15, 23, 42, 0.96) !important;
+}
+
+.student-rooms input,
+.student-rooms textarea,
+.student-rooms select {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.student-rooms section > header,
+.student-rooms .chat-header-wa {
+  background: rgba(15, 23, 42, 0.96) !important;
+}
+
+.student-rooms .sidebar-item,
+.student-rooms [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.student-rooms aside [role="button"]:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.wa-chat-bg {
+  background-color: #050816;
+  background-image:
+    radial-gradient(circle at 18px 24px, rgba(255, 255, 255, 0.055) 0 1px, transparent 1px),
+    radial-gradient(circle at 72px 58px, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px),
+    linear-gradient(135deg, rgba(255,255,255,0.022) 25%, transparent 25%),
+    linear-gradient(225deg, rgba(255,255,255,0.022) 25%, transparent 25%);
+  background-position: 0 0, 0 0, 0 0, 18px 18px;
+  background-size: 92px 92px, 112px 112px, 36px 36px, 36px 36px;
+}
+
+.room-qr-scan-line {
+  animation: roomQrScan 1.15s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+@keyframes roomQrScan {
+  from {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateY(calc(100vw - 9rem));
+    opacity: 1;
+  }
+}
+
+@media (min-width: 640px) {
+  @keyframes roomQrScan {
+    from {
+      transform: translateY(0);
+      opacity: 0.5;
+    }
+    to {
+      transform: translateY(19rem);
+      opacity: 1;
+    }
+  }
+}
+
+html.light .wa-chat-bg {
+  background-color: #f7f9ff;
+  background-image:
+    radial-gradient(circle at 20px 20px, rgba(15, 23, 42, 0.055) 0 1px, transparent 1px),
+    radial-gradient(circle at 70px 55px, rgba(15, 23, 42, 0.04) 0 1px, transparent 1px),
+    linear-gradient(135deg, rgba(79, 111, 255, 0.035) 25%, transparent 25%),
+    linear-gradient(225deg, rgba(79, 111, 255, 0.035) 25%, transparent 25%);
+}
+
+html.light .student-rooms {
+  background-color: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+
+html.light .student-rooms aside {
+  background: #ffffff !important;
+}
+
+html.light .student-rooms section > header,
+html.light .student-rooms .chat-header-wa {
+  background: rgba(248, 250, 252, 0.96) !important;
+}
+
+html.light .student-rooms input,
+html.light .student-rooms textarea,
+html.light .student-rooms select {
+  background-color: #ffffff !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+html.light .student-rooms textarea {
+  color: #0f172a !important;
+}
+
+html.light .student-rooms textarea::placeholder {
+  color: #64748b !important;
+}
 
 /* Camera overlay */
 .camera-overlay {

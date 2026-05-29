@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Bell, CheckCheck, AlertTriangle, Info, CheckCircle, XCircle, Video, Users, Trash2, Loader2 } from 'lucide-react';
+import { Bell, CheckCheck, AlertTriangle, Info, CheckCircle, XCircle, Video, Users, Trash2, Loader2, Bookmark, BookmarkCheck, CalendarDays } from 'lucide-react';
 import { notificationAPI } from '../../services/api';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
 import AppConfirmModal from '../../components/AppConfirmModal';
+import { useSocket } from '../../context/SocketContext';
+import { CardSkeleton } from '../../components/LoadingStates';
 
 const notifyUnreadChanged = () => window.dispatchEvent(new Event('notifications:changed'));
 
@@ -18,6 +20,14 @@ const typeIcon = {
   attendance_marked: CheckCircle,
   attendance_closed: Video,
   lecture_created: Video,
+  lecture_reminder: Video,
+  teacher_assignment: CheckCircle,
+  subject_classes_stopped: AlertTriangle,
+  subject_classes_resumed: CheckCircle,
+  low_attendance_alert: AlertTriangle,
+  attendance_dispute_created: AlertTriangle,
+  attendance_dispute_resolved: CheckCircle,
+  academic_calendar: CalendarDays,
   general: Info,
 };
 const typeColor = {
@@ -31,10 +41,19 @@ const typeColor = {
   attendance_marked: 'text-emerald-400 bg-emerald-400/10',
   attendance_closed: 'text-slate-400 bg-slate-400/10',
   lecture_created: 'text-primary-400 bg-primary-400/10',
+  lecture_reminder: 'text-cyan-400 bg-cyan-400/10',
+  teacher_assignment: 'text-emerald-400 bg-emerald-400/10',
+  subject_classes_stopped: 'text-amber-400 bg-amber-400/10',
+  subject_classes_resumed: 'text-emerald-400 bg-emerald-400/10',
+  low_attendance_alert: 'text-red-400 bg-red-400/10',
+  attendance_dispute_created: 'text-amber-400 bg-amber-400/10',
+  attendance_dispute_resolved: 'text-emerald-400 bg-emerald-400/10',
+  academic_calendar: 'text-amber-400 bg-amber-400/10',
   general: 'text-blue-400 bg-blue-400/10',
 };
 
 function NotificationsPage() {
+  const { socket } = useSocket();
   const [notifications, setNotifications] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deletingIds, setDeletingIds] = useState(new Set());
@@ -42,6 +61,7 @@ function NotificationsPage() {
   const [deletingSelected, setDeletingSelected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [preservingIds, setPreservingIds] = useState(new Set());
 
   const fetchNotifs = () => {
     notificationAPI.getAll()
@@ -59,6 +79,20 @@ function NotificationsPage() {
   };
 
   useEffect(() => { fetchNotifs(); }, []);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const refresh = () => {
+      fetchNotifs();
+      notifyUnreadChanged();
+    };
+    socket.on('notification_created', refresh);
+    socket.on('subject_updated', refresh);
+    return () => {
+      socket.off('notification_created', refresh);
+      socket.off('subject_updated', refresh);
+    };
+  }, [socket]);
 
   const markRead = async (id) => {
     await notificationAPI.markRead(id);
@@ -133,6 +167,21 @@ function NotificationsPage() {
     }
   };
 
+  const toggleAutoDeleteProtection = async (notification) => {
+    setPreservingIds(prev => new Set(prev).add(notification._id));
+    try {
+      const preserve = !notification.autoDeleteProtected;
+      const res = await notificationAPI.setAutoDeleteProtection(notification._id, preserve);
+      setNotifications(prev => prev.map(item => item._id === notification._id ? { ...item, ...res.data.notification } : item));
+    } finally {
+      setPreservingIds(prev => {
+        const next = new Set(prev);
+        next.delete(notification._id);
+        return next;
+      });
+    }
+  };
+
   const unread = notifications.filter(n => !n.isRead).length;
 
   return (
@@ -153,7 +202,7 @@ function NotificationsPage() {
         <div className="min-w-0">
           <h1 className="font-display text-2xl font-bold text-white flex items-center gap-2 flex-wrap">
             <Bell className="w-6 h-6 text-primary-400" /> Notifications
-            {unread > 0 && <span className="badge-warning ml-1">{unread} new</span>}
+            {unread > 0 && <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,0.15)]" aria-label="Unread notifications" />}
           </h1>
           <p className="text-slate-400 mt-1">Your latest updates and alerts</p>
         </div>
@@ -180,15 +229,19 @@ function NotificationsPage() {
 
       <AdminBreadcrumb items={[{ label: 'Administration' }, { label: 'Notifications' }]} />
 
+      <div className="rounded-2xl border border-primary-400/20 bg-primary-500/10 px-3 py-2.5 text-xs leading-5 text-primary-100 sm:px-4 sm:py-3 sm:text-sm">
+          Notifications are automatically cleared 24 hours after arrival. Use the bookmark icon to preserve important alerts in your inbox.
+      </div>
+
       {loading ? (
-        <div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
+        <CardSkeleton rows={6} />
       ) : notifications.length === 0 ? (
         <div className="text-center py-20 text-slate-500">
           <Bell className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p>No notifications yet</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="notification-list">
           {notifications.map((n, i) => {
             const Icon = typeIcon[n.type] || Info;
             const color = typeColor[n.type] || 'text-slate-400 bg-slate-400/10';
@@ -196,8 +249,8 @@ function NotificationsPage() {
             return (
               <motion.div key={n._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
                 onClick={() => !n.isRead && markRead(n._id)}
-                className={`glass-card cursor-pointer transition-all hover:border-white/10 border ${n.isRead ? 'border-transparent opacity-70' : 'border-primary-500/20'} ${isDeleting ? 'pointer-events-none opacity-50' : ''}`}>
-                <div className="flex items-start gap-3 sm:gap-4">
+                className={`notification-card glass-card compact-card cursor-pointer transition-all hover:border-white/10 border ${n.isRead ? 'border-transparent opacity-70' : 'border-primary-500/20'} ${isDeleting ? 'pointer-events-none opacity-50' : ''}`}>
+                <div className="notification-row flex items-start gap-3 sm:gap-4">
                   <input
                     type="checkbox"
                     checked={selectedIds.has(n._id)}
@@ -207,18 +260,29 @@ function NotificationsPage() {
                     className="mt-3 h-4 w-4 rounded border-white/20 bg-white/5 text-primary-500 focus:ring-primary-500"
                     aria-label={`Select ${n.title}`}
                   />
-                  <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${color}`}>
+                  <div className={`notification-icon w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${color}`}>
                     <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium text-white text-sm">{n.title}</p>
+                  <div className="notification-body flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                      <p className="notification-title font-medium text-white">{n.title}</p>
                       {!n.isRead && <span className="w-2 h-2 rounded-full bg-primary-500 flex-shrink-0" />}
-                      {n.priority === 'critical' && <span className="badge-danger text-xs">CRITICAL</span>}
+                  {n.priority === 'critical' && <span className="badge-danger text-xs">CRITICAL</span>}
+                      {n.autoDeleteProtected && <span className="badge-info text-xs">Saved</span>}
                     </div>
-                    <p className="text-slate-400 text-sm mt-0.5">{n.message}</p>
+                    <p className="notification-message text-slate-400 mt-0.5">{n.message}</p>
                     <p className="text-slate-600 text-xs mt-1">{new Date(n.createdAt).toLocaleString()}</p>
                   </div>
+                  <div className="notification-actions">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleAutoDeleteProtection(n); }}
+                    disabled={isDeleting || preservingIds.has(n._id)}
+                    className={`p-2 rounded-lg transition-colors disabled:cursor-wait ${n.autoDeleteProtected ? 'text-primary-300 bg-primary-500/10 hover:text-primary-200' : 'text-slate-500 hover:text-primary-300 hover:bg-primary-500/10'}`}
+                    aria-label={n.autoDeleteProtected ? `Allow auto delete for ${n.title}` : `Preserve ${n.title}`}
+                    title={n.autoDeleteProtected ? 'Allow auto delete' : 'Preserve from auto-delete'}
+                  >
+                    {preservingIds.has(n._id) ? <Loader2 className="w-4 h-4 animate-spin" /> : n.autoDeleteProtected ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+                  </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteOne(n._id); }}
                     disabled={isDeleting}
@@ -227,6 +291,7 @@ function NotificationsPage() {
                   >
                     {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   </button>
+                  </div>
                 </div>
               </motion.div>
             );

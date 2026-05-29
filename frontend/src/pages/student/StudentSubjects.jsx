@@ -1,46 +1,58 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, ChevronRight, TrendingUp } from 'lucide-react';
-import { subjectAPI, attendanceAPI } from '../../services/api';
+import { BarChart3, BookOpen, ChevronRight, GraduationCap } from 'lucide-react';
+import { useGetMySubjectsQuery } from '../../services/apiSlice';
 import { useAuth } from '../../context/AuthContext';
+import { useSocket } from '../../context/SocketContext';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
-import { PageLoader } from '../../components/LoadingStates';
+import { PageSkeleton } from '../../components/LoadingStates';
+import { getAcademicLabel, getSemesterLabel } from '../../utils/academicLabels';
+import { lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
 
 export default function StudentSubjects() {
   const { user } = useAuth();
-  const [subjects, setSubjects] = useState([]);
-  const [stats, setStats] = useState({});
-  const [loading, setLoading] = useState(true);
+  const { socket } = useSocket();
+  const { data, isLoading: loading, error } = useGetMySubjectsQuery(undefined, { refetchOnReconnect: true });
+  const subjects = data?.subjects || [];
+  const [activity, setActivity] = useState(() => readLmsActivity(user?._id));
+  if (error) console.error(error);
 
   useEffect(() => {
-    subjectAPI.getMine().then(async r => {
-      const subs = r.data.subjects;
-      setSubjects(subs);
-      // Fetch stats for each
-      const statsMap = {};
-      await Promise.all(subs.map(async s => {
-        try {
-          const res = await attendanceAPI.getStudentSubject(s._id);
-          statsMap[s._id] = res.data.stats;
-        } catch {}
-      }));
-      setStats(statsMap);
-    }).catch(console.error).finally(() => setLoading(false));
-  }, []);
+    setActivity(readLmsActivity(user?._id));
+  }, [user?._id]);
 
-  if (loading) return <PageLoader label="Loading your subjects..." />;
+  useEffect(() => {
+    const syncActivity = () => setActivity(readLmsActivity(user?._id));
+    window.addEventListener(lmsActivityEventName, syncActivity);
+    return () => window.removeEventListener(lmsActivityEventName, syncActivity);
+  }, [user?._id]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const handleLmsChange = (payload = {}) => {
+      const bucket = lmsActivityBucketForType(payload.type);
+      if (!payload.subjectId || !bucket) return;
+      markLmsActivity(user?._id, String(payload.subjectId), bucket);
+    };
+    socket.on('lms_changed', handleLmsChange);
+    return () => socket.off('lms_changed', handleLmsChange);
+  }, [socket, user?._id]);
+
+  if (loading) return <PageSkeleton variant="grid" cards={6} />;
+  const academicLabel = getAcademicLabel(user);
+  const activityLabels = { materials: 'Material', assignments: 'Assignment', quizzes: 'Quiz' };
 
   return (
     <div className="space-y-4 sm:space-y-6">
       <div>
         <h1 className="font-display text-2xl font-bold text-white">My Subjects</h1>
-        <p className="text-slate-400 mt-1">Semester {user?.semester} · {user?.department}</p>
+        <p className="text-slate-400 mt-1">{getSemesterLabel(user?.semester)} - {academicLabel}</p>
       </div>
 
       <AdminBreadcrumb items={[
-        { label: user?.department || 'Department' },
-        user?.semester && { label: `Semester ${user.semester}` },
+        { label: academicLabel },
+        user?.semester && { label: getSemesterLabel(user.semester) },
         { label: 'Subjects' }
       ]} />
 
@@ -50,48 +62,57 @@ export default function StudentSubjects() {
           <p>No subjects enrolled yet. Contact admin.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
-          {subjects.map((sub, i) => {
-            const s = stats[sub._id];
-            const pct = s ? parseFloat(s.percentage) : 0;
-            return (
-              <motion.div key={sub._id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-                <Link to={`/student/attendance/${sub._id}`} className="block h-full glass-card hover:border-primary-500/20 border border-transparent transition-all group">
-                  <div className="flex items-start justify-between mb-2 sm:mb-3">
-                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-primary-500/20 flex items-center justify-center">
-                      <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 text-primary-400" />
-                    </div>
-                    <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-600 group-hover:text-slate-400 transition-colors" />
+        <div className="three-card-grid student-subject-grid">
+          {subjects.map((sub, i) => (
+            <motion.div key={sub._id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
+              <div className="subject-card relative flex h-full flex-col glass-card compact-card hover:border-primary-500/20 border border-transparent transition-all group">
+                {Object.values(activity[String(sub._id)] || {}).some(Boolean) && (
+                  <span className="absolute right-3 top-3 h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14)]" aria-label="New classroom activity" />
+                )}
+                <div className="flex items-start justify-between mb-2 sm:mb-3">
+                  <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-xl bg-primary-500/20 flex items-center justify-center">
+                    <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 text-primary-400" />
                   </div>
-                  <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-white sm:text-base">{sub.name}</h3>
-                  <p className="font-mono text-primary-400 text-xs sm:text-sm">{sub.code}</p>
-                  <p className="text-slate-500 text-xs mt-1">{sub.department} · {sub.credits} Credits</p>
-
-                  {s && (
-                    <div className="mt-3 sm:mt-4">
-                      <div className="flex justify-between text-[11px] mb-1 sm:text-sm">
-                        <span className="text-slate-400">{s.attended}/{s.total}</span>
-                        <span className={`font-semibold ${pct >= 75 ? 'text-emerald-400' : pct >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
-                          {s.percentage}%
-                        </span>
-                      </div>
-                      <div className="h-1 sm:h-1.5 bg-white/10 rounded-full overflow-hidden">
-                        <motion.div
-                          initial={{ width: 0 }}
-                          animate={{ width: `${Math.min(100, pct)}%` }}
-                          transition={{ duration: 0.8, delay: i * 0.1 + 0.2 }}
-                          className={`h-full rounded-full ${pct >= 75 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-red-500'}`}
-                        />
-                      </div>
-                      {pct < 75 && s.total > 0 && (
-                        <p className="text-red-400 text-xs mt-1">⚠ Below 75% minimum</p>
-                      )}
-                    </div>
-                  )}
-                </Link>
-              </motion.div>
-            );
-          })}
+                  <Link className="hidden sm:block" to={`/student/subjects/${sub._id}/classroom`} aria-label={`Open ${sub.name} classroom`}>
+                    <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-600 group-hover:text-slate-400 transition-colors" />
+                  </Link>
+                </div>
+                <h3 className="line-clamp-2 text-[11px] font-semibold leading-snug text-white sm:text-base">{sub.name}</h3>
+                <p className="hidden truncate font-mono text-[10px] text-primary-400 sm:block sm:text-sm">{sub.code}</p>
+                <p className="mt-1 hidden text-xs text-slate-500 sm:block">{sub.branch || sub.department} - {sub.credits} Credits</p>
+                <p className="mt-3 hidden text-[11px] text-slate-400 sm:block sm:text-xs">Open classroom for materials, assignments, quizzes, and announcements.</p>
+                {!!activity[String(sub._id)] && (
+                  <div className="mt-2 hidden flex-wrap gap-1.5 sm:flex">
+                    {Object.entries(activityLabels).map(([key, label]) => activity[String(sub._id)]?.[key] ? (
+                      <span key={key} className="inline-flex items-center gap-1 rounded-full border border-red-400/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {label}
+                      </span>
+                    ) : null)}
+                  </div>
+                )}
+                <div className="mt-auto grid grid-cols-2 gap-2 pt-3 sm:mt-3 sm:pt-0">
+                  <Link
+                    to={`/student/subjects/${sub._id}/classroom`}
+                    className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg bg-primary-500/10 px-2 py-1 text-[11px] text-primary-200 transition-colors hover:bg-primary-500/15"
+                    title="Classroom"
+                    aria-label={`Open ${sub.name} classroom`}
+                  >
+                    <GraduationCap className="h-4 w-4 sm:h-3 sm:w-3" />
+                    <span className="hidden sm:inline">Classroom</span>
+                  </Link>
+                  <Link
+                    to={`/student/attendance/${sub._id}`}
+                    className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:bg-white/10"
+                    title="Attendance"
+                    aria-label={`Open ${sub.name} attendance`}
+                  >
+                    <BarChart3 className="h-4 w-4 sm:h-3 sm:w-3" />
+                    <span className="hidden sm:inline">Attendance</span>
+                  </Link>
+                </div>
+              </div>
+            </motion.div>
+          ))}
         </div>
       )}
     </div>

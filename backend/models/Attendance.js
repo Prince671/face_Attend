@@ -32,6 +32,9 @@ attendanceSchema.index({ subject: 1, student: 1, markedAt: -1 });
 attendanceSchema.index({ lecture: 1, status: 1 });
 attendanceSchema.index({ student: 1, markedAt: -1 });
 attendanceSchema.index({ subject: 1, status: 1 });
+attendanceSchema.index({ subject: 1, status: 1, createdAt: 1 });
+attendanceSchema.index({ subject: 1, status: 1, lecture: 1, student: 1 });
+attendanceSchema.index({ student: 1, subject: 1, status: 1 });
 attendanceSchema.index({ capturedImagePublicId: 1, markedAt: 1 });
 
 module.exports = mongoose.model('Attendance', attendanceSchema);

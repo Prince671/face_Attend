@@ -3,48 +3,365 @@ const Lecture = require('../models/Lecture');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
 const Notification = require('../models/Notification');
+const AttendanceDispute = require('../models/AttendanceDispute');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
+const crypto = require('crypto');
+const { ExcelJS, addArraySheet, addJsonSheet, loadWorkbook, rowToValues } = require('../utils/excelWorkbook');
 const { closeExpiredAttendance } = require('../utils/attendanceAutoClose');
-const { uploadImage, downloadImage, isRemoteImage } = require('../utils/cloudinary');
-const { SYSTEM_ADMIN_DEPARTMENT, adminDepartmentRoom, assertDepartmentAccess, getAdminDepartment, getAdminSemesterScope } = require('../utils/adminScope');
+const { uploadImage, downloadImage, isRemoteImage, deleteImage } = require('../utils/cloudinary');
+const { SYSTEM_ADMIN_DEPARTMENT, adminDepartmentRoom, assertDepartmentAccess, getAdminDepartment, getAdminSemesterScope, getTeacherSemesterScope } = require('../utils/adminScope');
 const { logAudit } = require('../utils/auditLogger');
+const { studentMatchesSubject } = require('../utils/subjectEnrollment');
+const { schedulePendingDeletion } = require('../utils/pendingDeletion');
 
 const attendanceFailure = (res, message, extra = {}) => {
   return res.json({ success: false, message, ...extra });
 };
 
+const subjectRestrictionFor = (student, subjectId) => (
+  (student?.subjectRestrictions || []).find(item => (
+    item?.active !== false &&
+    String(item.subject?._id || item.subject) === String(subjectId)
+  ))
+);
+
+const isRestrictedForSubject = (student, subjectId) => Boolean(
+  student?.isRestricted ||
+  student?.status === 'restricted' ||
+  subjectRestrictionFor(student, subjectId)
+);
+
 const formatDate = (date) => date ? new Date(date).toLocaleDateString('en-IN') : '-';
 const formatDateTime = (date) => date ? new Date(date).toLocaleString('en-IN') : '-';
 const cleanFilePart = (value) => String(value || 'attendance').replace(/[^a-z0-9_-]+/gi, '_');
+const studentIdSortValue = (value) => {
+  const id = String(value || '').toUpperCase();
+  const dMatch = id.match(/D(\d+)$/);
+  if (dMatch) return 100000 + Number(dMatch[1]);
+  const numberMatch = id.match(/(\d{1,4})$/);
+  return numberMatch ? Number(numberMatch[1]) : Number.MAX_SAFE_INTEGER;
+};
+const parseDateBoundary = (value, endOfDay = false) => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+  return date;
+};
 
-const sendWorkbook = (res, workbook, filename) => {
-  const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+const sendWorkbook = async (res, workbook, filename) => {
+  const buffer = await workbook.xlsx.writeBuffer();
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buffer);
 };
 
 const addSheet = (workbook, rows, name, cols = []) => {
-  const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Message: 'No records found' }]);
-  if (cols.length) sheet['!cols'] = cols.map(wch => ({ wch }));
-  XLSX.utils.book_append_sheet(workbook, sheet, name.slice(0, 31));
+  addJsonSheet(workbook, rows, name, cols);
+};
+
+const normalizeHeader = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '');
+
+const getRowValue = (row, aliases = []) => {
+  for (const alias of aliases) {
+    const key = normalizeHeader(alias);
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key];
+  }
+  return '';
+};
+
+const parseSpreadsheetRows = async (filePath, ext) => {
+  const { worksheets } = await loadWorkbook(filePath, ext);
+  const worksheet = worksheets[0];
+  if (!worksheet) return [];
+  const rawRows = [];
+  worksheet.eachRow({ includeEmpty: false }, row => rawRows.push(rowToValues(row)));
+  if (rawRows.length < 2) return [];
+  const headers = rawRows[0].map(normalizeHeader);
+  return rawRows.slice(1)
+    .map((values, index) => {
+      const row = { __rowNumber: index + 2 };
+      headers.forEach((header, colIndex) => {
+        if (header) row[header] = values[colIndex];
+      });
+      return row;
+    })
+    .filter(row => Object.keys(row).some(key => key !== '__rowNumber' && String(row[key] || '').trim()));
+};
+
+const isDateHeader = (value) => {
+  const date = parseImportDate(value);
+  if (!date) return false;
+  const year = date.getFullYear();
+  return year >= 2000 && year <= 2100;
+};
+
+const stringifyCell = (value) => {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'object') {
+    if (value.result != null) return stringifyCell(value.result);
+    if (value.text != null) return stringifyCell(value.text);
+    if (value.richText) return value.richText.map(part => part.text || '').join('');
+    if (value.formula || value.sharedFormula) return '';
+  }
+  return String(value).trim();
+};
+
+const rowHasContent = (values = []) => values.some(value => stringifyCell(value) !== '');
+
+const looksLikeStudentIdHeader = (value) => {
+  const header = normalizeHeader(value);
+  return ['studentid', 'student', 'enrollmentno', 'enrollmentnumber', 'enrollment', 'rollno', 'rollnumber', 'roll', 'id'].includes(header);
+};
+
+const looksLikeNameHeader = (value) => {
+  const header = normalizeHeader(value);
+  return ['nameofstudent', 'studentname', 'name', 'fullname'].includes(header);
+};
+
+const looksLikeStatusHeader = (value) => {
+  const header = normalizeHeader(value);
+  return ['status', 'attendance', 'mark', 'presentabsent', 'present', 'attendancevalue'].includes(header);
+};
+
+const buildRowsFromHeader = (rawRows, headerIndex) => {
+  const headers = rawRows[headerIndex].map(normalizeHeader);
+  return rawRows.slice(headerIndex + 1)
+    .map((values, index) => {
+      const row = { __rowNumber: headerIndex + index + 2 };
+      headers.forEach((header, colIndex) => {
+        if (header) row[header] = values[colIndex];
+      });
+      return row;
+    })
+    .filter(row => Object.keys(row).some(key => key !== '__rowNumber' && stringifyCell(row[key]) !== ''));
+};
+
+const parseWideAttendanceRows = (rawRows, headerIndex, sheetName) => {
+  const header = rawRows[headerIndex];
+  const studentIdIndex = header.findIndex(looksLikeStudentIdHeader);
+  const nameIndex = header.findIndex(looksLikeNameHeader);
+  const dateColumns = header
+    .map((value, index) => ({ value, index, date: parseImportDate(value) }))
+    .filter(item => item.date && isDateHeader(item.value));
+
+  if (studentIdIndex < 0 || dateColumns.length === 0) return [];
+
+  const rows = [];
+  rawRows.slice(headerIndex + 1).forEach((values, offset) => {
+    const rowNumber = headerIndex + offset + 2;
+    const studentId = stringifyCell(values[studentIdIndex]);
+    const studentName = nameIndex >= 0 ? stringifyCell(values[nameIndex]) : '';
+    if (!studentId || /^total|attendance|remark$/i.test(studentId)) return;
+
+    dateColumns.forEach(({ index, date }) => {
+      const rawStatus = values[index];
+      const statusText = stringifyCell(rawStatus);
+      if (statusText === '') return;
+      rows.push({
+        __rowNumber: rowNumber,
+        __sheetName: sheetName,
+        date,
+        studentId,
+        studentName,
+        status: rawStatus
+      });
+    });
+  });
+
+  return rows;
+};
+
+const parseAttendanceImportRows = async (filePath, ext) => {
+  const { worksheets } = await loadWorkbook(filePath, ext);
+  const parsedRows = [];
+
+  worksheets.forEach((worksheet) => {
+    const rawRows = [];
+    worksheet.eachRow({ includeEmpty: false }, row => rawRows.push(rowToValues(row)));
+    if (rawRows.length < 2) return;
+
+    let bestWide = { index: -1, score: 0 };
+    let bestLong = { index: -1, score: 0 };
+    rawRows.slice(0, 30).forEach((values, index) => {
+      const hasStudentId = values.some(looksLikeStudentIdHeader);
+      const dateCount = values.filter(isDateHeader).length;
+      const hasDateHeader = values.some(value => normalizeHeader(value) === 'date' || normalizeHeader(value) === 'attendancedate' || normalizeHeader(value) === 'lecturedate' || normalizeHeader(value) === 'classdate');
+      const hasStatusHeader = values.some(looksLikeStatusHeader);
+      const wideScore = (hasStudentId ? 10 : 0) + dateCount;
+      const longScore = (hasStudentId ? 10 : 0) + (hasDateHeader ? 5 : 0) + (hasStatusHeader ? 5 : 0);
+      if (wideScore > bestWide.score) bestWide = { index, score: wideScore };
+      if (longScore > bestLong.score) bestLong = { index, score: longScore };
+    });
+
+    if (bestWide.index >= 0 && bestWide.score >= 12) {
+      parsedRows.push(...parseWideAttendanceRows(rawRows, bestWide.index, worksheet.name));
+      return;
+    }
+
+    if (bestLong.index >= 0 && bestLong.score >= 15) {
+      parsedRows.push(...buildRowsFromHeader(rawRows, bestLong.index));
+      return;
+    }
+
+    parsedRows.push(...buildRowsFromHeader(rawRows, 0));
+  });
+
+  return parsedRows;
+};
+
+const normalizeAttendanceStatus = (value) => {
+  const status = String(value || 'present').trim().toLowerCase();
+  if (['present', 'p', '1', 'yes', 'y', 'true'].includes(status)) return 'present';
+  if (['absent', 'a', '0', 'no', 'n', 'false'].includes(status)) return 'absent';
+  return null;
+};
+
+const parseImportDate = (value) => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const date = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (dmy) {
+    const [, dd, mm, yyyy] = dmy;
+    const year = yyyy.length === 2 ? Number(`20${yyyy}`) : Number(yyyy);
+    const date = new Date(year, Number(mm) - 1, Number(dd));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const importDateKey = (value) => {
+  const date = parseDateBoundary(value, false);
+  return date ? date.toISOString().slice(0, 10) : '';
+};
+
+const findOrCreateImportedLecture = async ({ subject, dayStart, req }) => {
+  const dayEnd = parseDateBoundary(dayStart, true);
+  let lecture = await Lecture.findOne({
+    subject: subject._id,
+    date: { $gte: dayStart, $lte: dayEnd },
+    pendingDeletion: { $ne: true }
+  }).sort({ startTime: 1 });
+
+  if (!lecture) {
+    return Lecture.create({
+      subject: subject._id,
+      title: `Imported Attendance - ${formatDate(dayStart)}`,
+      description: 'Attendance imported from CSV/Excel sheet',
+      date: dayStart,
+      startTime: '00:00',
+      endTime: '00:01',
+      duration: 1,
+      createdBy: req.user._id,
+      status: 'completed',
+      attendanceOpen: false,
+      attendanceClosedAt: new Date(),
+      source: 'imported'
+    });
+  }
+
+  lecture.status = 'completed';
+  lecture.attendanceOpen = false;
+  lecture.attendanceClosedAt = lecture.attendanceClosedAt || new Date();
+  lecture.source = 'imported';
+  return lecture.save();
+};
+
+const rowStudentName = (row) => String(getRowValue(row, [
+  'studentName', 'student name', 'name', 'full name', 'name of student'
+]) || '').trim();
+
+const rowStudentEmail = (row) => String(getRowValue(row, [
+  'email', 'gmail', 'gmail id', 'email address'
+]) || '').trim().toLowerCase();
+
+const rowStudentIdentifier = (row) => String(getRowValue(row, [
+  'studentId', 'student id', 'roll no', 'roll', 'enrollment no', 'enrollment', 'email', 'gmail'
+]) || '').trim();
+
+const syntheticImportEmail = async (studentId, subject) => {
+  const base = String(studentId || crypto.randomUUID())
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '') || crypto.randomUUID();
+  let candidate = `${base}@students.local`;
+  let suffix = 1;
+  while (await User.exists({ email: candidate })) {
+    candidate = `${base}.${suffix}@students.local`;
+    suffix += 1;
+  }
+  return candidate;
+};
+
+const findOrCreateImportStudent = async ({ row, subject, req, warnings, cache }) => {
+  const rawIdentifier = rowStudentIdentifier(row);
+  const email = rowStudentEmail(row);
+  const studentId = email && rawIdentifier.toLowerCase() === email ? '' : rawIdentifier;
+  const cacheKey = String(studentId || email || rawIdentifier).trim().toLowerCase();
+  if (cacheKey && cache?.has(cacheKey)) return cache.get(cacheKey);
+  const query = {
+    role: 'student',
+    pendingDeletion: { $ne: true },
+    $or: []
+  };
+  if (studentId) query.$or.push({ studentId: new RegExp(`^${studentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+  if (email) query.$or.push({ email });
+
+  let student = query.$or.length ? await User.findOne(query).select('name email studentId department branch semester enrolledSubjects status isRestricted restrictionReason subjectRestrictions') : null;
+  if (student) {
+    const warningParts = [];
+    if (!studentMatchesSubject(student, subject)) warningParts.push('student academic details do not match this subject');
+    if (!(student.enrolledSubjects || []).some(id => String(id) === String(subject._id))) warningParts.push('student was not enrolled in this subject');
+    if (isRestrictedForSubject(student, subject._id)) warningParts.push('student is restricted');
+    if (warningParts.length && warnings.length < 50) {
+      warnings.push({ row: row.__rowNumber, message: `${student.studentId || student.email}: ${warningParts.join(', ')}. Attendance imported anyway.` });
+    }
+    await User.updateOne({ _id: student._id }, { $addToSet: { enrolledSubjects: subject._id } });
+    student.enrolledSubjects = [...(student.enrolledSubjects || []), subject._id];
+    if (cacheKey && cache) cache.set(cacheKey, student);
+    return student;
+  }
+
+  if (!studentId && !email) return null;
+  const placeholderId = studentId || `IMPORT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  student = await User.create({
+    name: rowStudentName(row) || placeholderId,
+    email: email || await syntheticImportEmail(placeholderId, subject),
+    password: `Import@${crypto.randomUUID().slice(0, 12)}`,
+    role: 'student',
+    studentId: placeholderId,
+    course: 'B. Tech',
+    department: subject.department,
+    branch: subject.branch || subject.department,
+    semester: subject.semester,
+    status: 'inactive',
+    enrolledSubjects: [subject._id]
+  });
+  if (warnings.length < 50) {
+    warnings.push({ row: row.__rowNumber, message: `${placeholderId}: student was not registered, so a placeholder inactive student was created and attendance was imported.` });
+  }
+  if (cacheKey && cache) cache.set(cacheKey, student);
+  return student;
 };
 
 const resolveProfileImagePath = async (student) => {
-  const profileCandidate = isRemoteImage(student.profileImage)
-    ? student.profileImage
-    : student.profileImage
-      ? path.join(__dirname, '..', student.profileImage.replace(/^\/+/, ''))
-      : null;
-
   const candidates = [
     student.faceImagePath,
-    profileCandidate
-  ].filter(Boolean);
+    student.profileImage
+  ].filter(isRemoteImage);
 
   for (const candidate of candidates) {
     try {
@@ -136,7 +453,9 @@ const ensureStudentFaceEncoding = async (student, fallbackImagePath = null) => {
       }
 
       student.faceEncoding = validation.encoding;
-      student.faceImagePath = student.faceImagePath || student.profileImage || candidate;
+      if (!student.faceImagePath && isRemoteImage(student.profileImage)) {
+        student.faceImagePath = student.profileImage;
+      }
       await student.save({ validateBeforeSave: false });
       cleanupFiles(tempDownloads);
       return { ok: true };
@@ -161,6 +480,13 @@ const cleanupFiles = (paths = []) => {
 };
 
 const getScopedSubjectIds = async (user) => {
+  if (user?.role === 'teacher') {
+    const query = { assignedTeachers: user._id, isActive: true, pendingDeletion: { $ne: true } };
+    const semester = getTeacherSemesterScope(user);
+    if (semester) query.semester = semester;
+    const subjects = await Subject.find(query).select('_id');
+    return subjects.map(subject => subject._id);
+  }
   const department = getAdminDepartment(user);
   if (!department) return null;
   const query = { department, isActive: true };
@@ -174,6 +500,19 @@ const ensureSubjectAccess = (subject, req, res) => {
   if (!subject) {
     res.status(404).json({ success: false, message: 'Subject not found' });
     return false;
+  }
+  if (req.user.role === 'teacher') {
+    const assigned = (subject.assignedTeachers || []).some(id => id.toString() === req.user._id.toString());
+    if (!assigned) {
+      res.status(403).json({ success: false, message: 'Access denied: subject is not assigned to this teacher' });
+      return false;
+    }
+    const semester = getTeacherSemesterScope(req.user);
+    if (semester && Number(subject.semester) !== semester) {
+      res.status(403).json({ success: false, message: 'Access denied: subject belongs to another semester scope' });
+      return false;
+    }
+    return true;
   }
   if (!assertDepartmentAccess(subject, req.user)) {
     res.status(403).json({ success: false, message: 'Access denied: subject belongs to another department' });
@@ -194,13 +533,13 @@ const ensureLectureAccess = async (lecture, req, res) => {
   }
   const subject = lecture.subject?.department
     ? lecture.subject
-    : await Subject.findById(lecture.subject).select('department');
+    : await Subject.findById(lecture.subject).select('department semester assignedTeachers');
   return ensureSubjectAccess(subject, req, res);
 };
 
 const ensureStudentSubjectAccess = async (subjectId, req, res) => {
-  const student = await User.findById(req.user._id).select('department semester enrolledSubjects role');
-  const subject = await Subject.findById(subjectId).select('department semester isActive');
+  const student = await User.findById(req.user._id).select('department branch semester enrolledSubjects role status isRestricted restrictionReason subjectRestrictions');
+  const subject = await Subject.findById(subjectId).select('department branch semester isActive');
   if (!student || student.role !== 'student') {
     res.status(403).json({ success: false, message: 'Student access required' });
     return false;
@@ -209,14 +548,77 @@ const ensureStudentSubjectAccess = async (subjectId, req, res) => {
     res.status(404).json({ success: false, message: 'Subject not found' });
     return false;
   }
-  const allowed = subject.department === student.department &&
-    Number(subject.semester) === Number(student.semester) &&
+  const allowed = studentMatchesSubject(student, subject) &&
     student.enrolledSubjects.some(id => id.toString() === subjectId);
   if (!allowed) {
     res.status(403).json({ success: false, message: 'Access denied: subject is not assigned to your semester' });
     return false;
   }
+  if (isRestrictedForSubject(student, subjectId)) {
+    res.status(403).json({
+      success: false,
+      message: student.isRestricted || student.status === 'restricted'
+        ? 'Your profile is restricted. Attendance access is disabled.'
+        : 'Your profile is restricted for this subject. Attendance access is disabled for this subject.'
+    });
+    return false;
+  }
   return true;
+};
+
+const buildLectureAttendancePayload = async (lecture) => {
+  const [attendanceRecords, enrolledStudents] = await Promise.all([
+    Attendance.find({ lecture: lecture._id })
+      .populate('student', 'name studentId profileImage department branch semester status isRestricted restrictionReason subjectRestrictions')
+      .sort({ markedAt: -1 }),
+    User.find({
+      enrolledSubjects: lecture.subject._id,
+      status: { $in: ['active', 'restricted'] },
+      role: 'student',
+      pendingDeletion: { $ne: true }
+    }).select('name studentId profileImage department branch semester status isRestricted restrictionReason subjectRestrictions')
+  ]);
+
+  const matchingStudents = enrolledStudents.filter(student => studentMatchesSubject(student, lecture.subject));
+  const matchingStudentIds = new Set(matchingStudents.map(student => student._id.toString()));
+  const attendance = attendanceRecords.filter(record => (
+    record.student && matchingStudentIds.has(record.student._id.toString())
+    && record.status === 'present'
+  ));
+  const presentIds = new Set(attendance.map(record => record.student._id.toString()));
+  const absentStudents = matchingStudents.filter(student => !presentIds.has(student._id.toString()));
+
+  return {
+    success: true,
+    lecture,
+    attendance,
+    absentStudents,
+    stats: {
+      total: matchingStudents.length,
+      present: attendance.length,
+      absent: absentStudents.length,
+      percentage: matchingStudents.length ? ((attendance.length / matchingStudents.length) * 100).toFixed(1) : 0
+    }
+  };
+};
+
+const emitDirectNotification = (req, userId, notification) => {
+  const io = req.app.get('io');
+  if (!io || !userId || !notification) return;
+  io.to(`user_${userId}`).emit('notification_created', {
+    _id: notification._id,
+    title: notification.title,
+    message: notification.message,
+    type: notification.type,
+    createdAt: notification.createdAt
+  });
+  io.to(`student_${userId}`).emit('notification_created', {
+    _id: notification._id,
+    title: notification.title,
+    message: notification.message,
+    type: notification.type,
+    createdAt: notification.createdAt
+  });
 };
 
 // @desc  Mark attendance via face recognition + OTP
@@ -242,7 +644,7 @@ const markAttendance = async (req, res) => {
       return attendanceFailure(res, 'lectureId and attendanceCode are required.');
     }
 
-    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department semester pendingDeletion');
+    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department branch semester pendingDeletion assignedTeachers');
     if (!lecture || lecture.pendingDeletion || lecture.subject?.pendingDeletion) {
       cleanupFiles(uploadedPaths);
       return attendanceFailure(res, 'Lecture not found.');
@@ -303,40 +705,36 @@ const markAttendance = async (req, res) => {
     }
 
     // Restricted student alert
-    if (verificationResult.is_restricted || student.isRestricted) {
+    const subjectRestriction = subjectRestrictionFor(student, lecture.subject._id);
+    if (verificationResult.is_restricted || isRestrictedForSubject(student, lecture.subject._id)) {
       const io = req.app.get('io');
-      const admins = await User.find({
-        role: 'admin',
+      const recipients = await User.find({
+        role: { $in: ['admin', 'teacher'] },
         status: 'active',
-        department: { $in: [SYSTEM_ADMIN_DEPARTMENT, lecture.subject.department] }
+        department: lecture.subject.department
       });
 
-      const notifPromises = admins.map(admin =>
+      const notifPromises = recipients.map(recipient =>
         Notification.create({
-          recipient: admin._id,
-          recipientRole: 'admin',
+          recipient: recipient._id,
+          recipientRole: recipient.role,
           type: 'unwanted_student_detected',
-          title: '🚨 Restricted Student Detected!',
+          title: 'Restricted Student Detected',
           message: `Restricted student ${student.name} (${student.studentId}) attempted attendance in ${lecture.subject.name} - ${lecture.title}`,
-          data: { studentId: student._id, studentName: student.name, lectureId },
+          data: { studentId: student._id, studentName: student.name, lectureId, subjectId: lecture.subject._id, subjectRestriction: Boolean(subjectRestriction) },
           priority: 'critical'
         })
       );
       await Promise.all(notifPromises);
 
       if (io) {
-        io.to('admin_room').emit('restricted_student_detected', {
-          studentName: student.name,
-          studentId: student.studentId,
-          lectureName: lecture.title,
-          subjectName: lecture.subject.name,
-          timestamp: new Date()
-        });
         io.to(adminDepartmentRoom(lecture.subject.department)).emit('restricted_student_detected', {
           studentName: student.name,
           studentId: student.studentId,
+          studentMongoId: student._id,
           lectureName: lecture.title,
           subjectName: lecture.subject.name,
+          department: lecture.subject.department,
           timestamp: new Date()
         });
       }
@@ -344,7 +742,9 @@ const markAttendance = async (req, res) => {
       cleanupFiles(uploadedPaths);
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Your account is restricted.',
+        message: subjectRestriction
+          ? `Access denied. Your profile is restricted for ${lecture.subject.name}.`
+          : 'Access denied. Your account is restricted.',
         restricted: true
       });
     }
@@ -365,10 +765,25 @@ const markAttendance = async (req, res) => {
       );
     }
 
+    const minActiveLiveness = Number(process.env.MIN_ACTIVE_LIVENESS_SCORE || 0.35);
+    const minQualityScore = Number(process.env.MIN_FACE_QUALITY_SCORE || 0.25);
+    const activeLivenessScore = Number(verificationResult.active_liveness_score ?? verificationResult.liveness_score ?? 1);
+    const qualityScore = Number(verificationResult.quality_score ?? 1);
+    if (activeLivenessScore < minActiveLiveness || qualityScore < minQualityScore) {
+      cleanupFiles(uploadedPaths);
+      return attendanceFailure(res, 'Liveness verification failed. Please use the live camera with clear lighting and natural face movement.', {
+        livenessScore: verificationResult.liveness_score,
+        activeLivenessScore: verificationResult.active_liveness_score,
+        qualityScore: verificationResult.quality_score,
+        requiredLivenessScore: minActiveLiveness,
+        requiredQualityScore: minQualityScore
+      });
+    }
+
     let captureUpload;
     try {
       captureUpload = await uploadImage(filePath, {
-        folder: `${process.env.CLOUDINARY_FOLDER || 'faceattend'}/captures`,
+        folder: `${process.env.CLOUDINARY_FOLDER || 'studysphere'}/captures`,
         publicId: `attendance_${student.studentId || student._id}_${lectureId}_${Date.now()}`
       });
     } catch (err) {
@@ -457,7 +872,7 @@ const getStudentSubjectAttendance = async (req, res) => {
     if (!(await ensureStudentSubjectAccess(subjectId, req, res))) return;
 
     const lectures = await Lecture.find({ subject: subjectId, status: 'completed' })
-      .populate('subject', 'name code semester')
+      .populate('subject', 'name code branch semester department assignedTeachers')
       .sort({ date: 1, startTime: 1, createdAt: 1 });
     const lectureIds = lectures.map(lec => lec._id);
 
@@ -473,10 +888,19 @@ const getStudentSubjectAttendance = async (req, res) => {
       if (a.lecture?._id) attendanceMap[a.lecture._id.toString()] = a;
     });
 
+    const disputes = await AttendanceDispute.find({
+      student: studentId,
+      subject: subjectId,
+      lecture: { $in: lectureIds }
+    }).lean();
+    const disputeMap = {};
+    disputes.forEach(dispute => { disputeMap[dispute.lecture.toString()] = dispute; });
+
     const result = lectures.map(lec => ({
       lecture: lec,
       attendance: attendanceMap[lec._id.toString()] || null,
-      status: attendanceMap[lec._id.toString()] ? 'present' : 'absent'
+      status: attendanceMap[lec._id.toString()] ? 'present' : 'absent',
+      dispute: disputeMap[lec._id.toString()] || null
     }));
 
     const presentCount = Object.keys(attendanceMap).length;
@@ -494,16 +918,239 @@ const getStudentSubjectAttendance = async (req, res) => {
   }
 };
 
+const createAttendanceDispute = async (req, res) => {
+  try {
+    const { lectureId, lectureIds, reason } = req.body || {};
+    const ids = [...new Set((Array.isArray(lectureIds) ? lectureIds : [lectureId]).filter(Boolean).map(String))];
+    if (!ids.length || !String(reason || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Lecture and reason are required.' });
+    }
+
+    const lectures = await Lecture.find({ _id: { $in: ids } }).populate('subject', 'name code department branch semester assignedTeachers');
+    if (lectures.length !== ids.length || lectures.some(lecture => lecture.status !== 'completed')) {
+      return res.status(400).json({ success: false, message: 'Disputes can be raised only for completed lectures.' });
+    }
+    const subjectIds = [...new Set(lectures.map(lecture => lecture.subject._id.toString()))];
+    if (subjectIds.length !== 1) {
+      return res.status(400).json({ success: false, message: 'Combined disputes must be for one subject only.' });
+    }
+    if (!(await ensureStudentSubjectAccess(subjectIds[0], req, res))) return;
+
+    const presentLectureIds = await Attendance.distinct('lecture', {
+      lecture: { $in: lectures.map(lecture => lecture._id) },
+      student: req.user._id,
+      status: 'present'
+    });
+    const presentSet = new Set(presentLectureIds.map(String));
+    const disputedLectures = lectures.filter(lecture => !presentSet.has(String(lecture._id)));
+    if (!disputedLectures.length) {
+      return res.status(400).json({ success: false, message: 'Selected attendance records are already marked present.' });
+    }
+
+    const disputes = [];
+    for (const lecture of disputedLectures) {
+      const dispute = await AttendanceDispute.findOneAndUpdate(
+        { lecture: lecture._id, student: req.user._id },
+        {
+          $setOnInsert: {
+            lecture: lecture._id,
+            subject: lecture.subject._id,
+            student: req.user._id,
+          },
+          $set: {
+            reason: String(reason).trim(),
+            status: 'pending',
+            resolutionNote: ''
+          },
+          $unset: {
+            resolvedBy: '',
+            resolvedAt: ''
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      disputes.push(dispute);
+    }
+
+    const lecture = disputedLectures[0];
+    const recipients = (lecture.subject.assignedTeachers || []).map(id => id.toString());
+    const admins = await User.find({
+      role: 'admin',
+      status: 'active',
+      department: { $in: [SYSTEM_ADMIN_DEPARTMENT, lecture.subject.department] }
+    }).select('_id').lean();
+    admins.forEach(admin => recipients.push(admin._id.toString()));
+    const uniqueRecipients = [...new Set(recipients)];
+    await Promise.all(uniqueRecipients.map(recipient => Notification.create({
+      recipient,
+      recipientRole: 'admin',
+      type: 'attendance_dispute_created',
+      title: 'Attendance correction requested',
+      message: `${req.user.name} requested correction for ${lecture.subject.name}${disputes.length > 1 ? ` across ${disputes.length} dates` : ` - ${lecture.title}`}.`,
+      data: { disputeId: disputes[0]._id, disputeIds: disputes.map(item => item._id), lectureId: lecture._id, subjectId: lecture.subject._id, studentId: req.user._id },
+      priority: 'high'
+    }).then(notification => emitDirectNotification(req, recipient, notification))));
+
+    res.status(201).json({ success: true, dispute: disputes[0], disputes, count: disputes.length });
+  } catch (err) {
+    console.error('createAttendanceDispute error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const getAttendanceDisputes = async (req, res) => {
+  try {
+    const scopedSubjectIds = await getScopedSubjectIds(req.user);
+    const query = {};
+    if (scopedSubjectIds) query.subject = { $in: scopedSubjectIds };
+    if (req.query.subjectId) {
+      if (scopedSubjectIds && !scopedSubjectIds.some(id => id.toString() === String(req.query.subjectId))) {
+        return res.status(403).json({ success: false, message: 'Access denied for this subject.' });
+      }
+      query.subject = req.query.subjectId;
+    }
+    if (req.query.status) query.status = req.query.status;
+    if (req.query.startDate || req.query.endDate) {
+      const start = parseDateBoundary(req.query.startDate || new Date(0));
+      const end = parseDateBoundary(req.query.endDate || new Date(), true);
+      const lectureQuery = { date: { $gte: start, $lte: end } };
+      if (query.subject) lectureQuery.subject = query.subject;
+      const lectureIds = await Lecture.distinct('_id', lectureQuery);
+      query.lecture = { $in: lectureIds };
+    }
+    const disputes = await AttendanceDispute.find(query)
+      .populate('student', 'name studentId email profileImage department branch semester')
+      .populate('subject', 'name code department branch semester assignedTeachers')
+      .populate('lecture', 'title date startTime endTime')
+      .populate('resolvedBy', 'name email role')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, disputes });
+  } catch (err) {
+    console.error('getAttendanceDisputes error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const resolveAttendanceDispute = async (req, res) => {
+  try {
+    const { status, note = '', attendanceStatus } = req.body || {};
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Resolution status must be approved or rejected.' });
+    }
+    if (attendanceStatus && !['present', 'absent'].includes(attendanceStatus)) {
+      return res.status(400).json({ success: false, message: 'Attendance status must be present or absent.' });
+    }
+    const dispute = await AttendanceDispute.findById(req.params.id)
+      .populate('subject', 'name code department branch semester assignedTeachers')
+      .populate('lecture', 'title date startTime endTime')
+      .populate('student', 'name studentId');
+    if (!dispute) return res.status(404).json({ success: false, message: 'Dispute not found.' });
+    if (!ensureSubjectAccess(dispute.subject, req, res)) return;
+
+    dispute.status = status;
+    dispute.resolvedBy = req.user._id;
+    dispute.resolvedAt = new Date();
+    dispute.resolutionNote = String(note || '').trim();
+    await dispute.save();
+
+    const nextAttendanceStatus = attendanceStatus || (status === 'approved' ? 'present' : null);
+    if (nextAttendanceStatus) {
+      await Attendance.findOneAndUpdate(
+        { lecture: dispute.lecture._id, student: dispute.student._id },
+        {
+          $set: {
+            lecture: dispute.lecture._id,
+            subject: dispute.subject._id,
+            student: dispute.student._id,
+            status: nextAttendanceStatus,
+            markedAt: new Date(),
+            faceVerified: false,
+            markedBy: 'admin',
+            verificationDetails: { disputeResolved: true, disputeStatus: status }
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    const noteText = dispute.resolutionNote ? ` Note: ${dispute.resolutionNote}` : '';
+    const attendanceText = nextAttendanceStatus ? ` Attendance is marked ${nextAttendanceStatus}.` : '';
+    const notification = await Notification.create({
+      recipient: dispute.student._id,
+      recipientRole: 'student',
+      type: 'attendance_dispute_resolved',
+      title: `Attendance request ${status}`,
+      message: `Your correction request for ${dispute.subject.name} - ${dispute.lecture.title} was ${status}.${attendanceText}${noteText}`,
+      data: {
+        disputeId: dispute._id,
+        lectureId: dispute.lecture._id,
+        subjectId: dispute.subject._id,
+        status,
+        attendanceStatus: nextAttendanceStatus || undefined,
+        note: dispute.resolutionNote || undefined
+      },
+      priority: status === 'approved' ? 'medium' : 'high'
+    });
+    emitDirectNotification(req, dispute.student._id, notification);
+
+    res.json({ success: true, dispute });
+  } catch (err) {
+    console.error('resolveAttendanceDispute error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const deleteAttendanceDispute = async (req, res) => {
+  try {
+    const dispute = await AttendanceDispute.findById(req.params.id)
+      .populate('subject', 'name code department branch semester assignedTeachers');
+    if (!dispute) return res.status(404).json({ success: false, message: 'Dispute not found.' });
+    if (!ensureSubjectAccess(dispute.subject, req, res)) return;
+
+    await AttendanceDispute.deleteOne({ _id: dispute._id });
+    res.json({ success: true, message: 'Dispute deleted.' });
+  } catch (err) {
+    console.error('deleteAttendanceDispute error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const deleteAttendanceDisputes = async (req, res) => {
+  try {
+    const scopedSubjectIds = await getScopedSubjectIds(req.user);
+    const query = {};
+    if (scopedSubjectIds) query.subject = { $in: scopedSubjectIds };
+    if (req.query.subjectId) {
+      if (scopedSubjectIds && !scopedSubjectIds.some(id => id.toString() === String(req.query.subjectId))) {
+        return res.status(403).json({ success: false, message: 'Access denied for this subject.' });
+      }
+      const subject = await Subject.findById(req.query.subjectId).select('name code department branch semester assignedTeachers');
+      if (!subject) return res.status(404).json({ success: false, message: 'Subject not found.' });
+      if (!ensureSubjectAccess(subject, req, res)) return;
+      query.subject = req.query.subjectId;
+    }
+    if (req.query.status) query.status = req.query.status;
+
+    const result = await AttendanceDispute.deleteMany(query);
+    res.json({ success: true, deletedCount: result.deletedCount || 0, message: `${result.deletedCount || 0} dispute${result.deletedCount === 1 ? '' : 's'} deleted.` });
+  } catch (err) {
+    console.error('deleteAttendanceDisputes error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
 // @desc  Download attendance as Excel
 const downloadAttendanceExcel = async (req, res) => {
   try {
     const { subjectId } = req.params;
-    const student = await User.findById(req.user._id).select('name studentId department semester');
+    const student = await User.findById(req.user._id).select('name studentId department branch semester');
     const subject = await Subject.findById(subjectId);
 
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
     if (!subject) return res.status(404).json({ success: false, message: 'Subject not found' });
-    if (subject.department !== student.department || Number(subject.semester) !== Number(student.semester)) {
+    if (!studentMatchesSubject(student, subject)) {
       return res.status(403).json({ success: false, message: 'Access denied: subject is not assigned to your semester' });
     }
 
@@ -540,7 +1187,7 @@ const downloadAttendanceExcel = async (req, res) => {
     });
 
     const workbookRows = [
-      ['FaceAttend - Student Attendance Report'],
+      ['StudySphere - Student Attendance Report'],
       [],
       ['Student Name', student.name || '-'],
       ['Student ID', student.studentId || '-'],
@@ -574,18 +1221,14 @@ const downloadAttendanceExcel = async (req, res) => {
       workbookRows.push(['-', '-', 'No lectures found for this subject', '-', '-', '-', '-', '-', '-']);
     }
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(workbookRows);
-    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }];
-    ws['!cols'] = [
-      { wch: 8 }, { wch: 14 }, { wch: 30 }, { wch: 12 },
-      { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 16 }, { wch: 16 }
-    ];
-    ws['!autofilter'] = { ref: `A17:I${Math.max(17 + rows.length, 18)}` };
-    XLSX.utils.book_append_sheet(wb, ws, 'Attendance');
+    const wb = new ExcelJS.Workbook();
+    addArraySheet(wb, workbookRows, 'Attendance', [8, 14, 30, 12, 12, 10, 22, 16, 16]);
+    const ws = wb.getWorksheet('Attendance');
+    ws.mergeCells('A1:I1');
+    ws.autoFilter = `A17:I${Math.max(17 + rows.length, 18)}`;
 
     const filename = `Attendance_${cleanFilePart(student.studentId)}_${cleanFilePart(subject.code)}.xlsx`;
-    sendWorkbook(res, wb, filename);
+    await sendWorkbook(res, wb, filename);
   } catch (err) {
     console.error('downloadAttendanceExcel error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
@@ -595,7 +1238,7 @@ const downloadAttendanceExcel = async (req, res) => {
 const getAdminAttendanceByLecture = async (req, res) => {
   try {
     const { lectureId } = req.params;
-    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department');
+    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department branch semester assignedTeachers');
     if (!(await ensureLectureAccess(lecture, req, res))) return;
     await logAudit(req, {
       action: 'attendance.viewed',
@@ -604,12 +1247,399 @@ const getAdminAttendanceByLecture = async (req, res) => {
       entityName: lecture.title,
       targetDepartment: lecture.subject.department,
     });
-    const attendance = await Attendance.find({ lecture: lectureId })
-      .populate('student', 'name studentId profileImage department semester')
-      .sort({ markedAt: -1 });
-    res.json({ success: true, attendance });
+    res.json(await buildLectureAttendancePayload(lecture));
   } catch (err) {
     console.error('getAdminAttendanceByLecture error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const updateLectureAttendanceStatus = async (req, res) => {
+  try {
+    const { lectureId } = req.params;
+    const { studentId, studentIds, status } = req.body || {};
+    const targetStudentIds = Array.isArray(studentIds) && studentIds.length ? studentIds : (studentId ? [studentId] : []);
+    const uniqueStudentIds = [...new Set(targetStudentIds.map(id => String(id)).filter(Boolean))];
+    if (!uniqueStudentIds.length || !['present', 'absent'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'studentId/studentIds and status (present/absent) are required' });
+    }
+
+    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department branch semester assignedTeachers');
+    if (!(await ensureLectureAccess(lecture, req, res))) return;
+
+    const students = await User.find({
+      _id: { $in: uniqueStudentIds },
+      role: 'student',
+      enrolledSubjects: lecture.subject._id,
+      pendingDeletion: { $ne: true }
+    }).select('name studentId department branch semester enrolledSubjects status isRestricted restrictionReason subjectRestrictions');
+    const invalidStudent = students.find(student => !studentMatchesSubject(student, lecture.subject));
+    if (students.length !== uniqueStudentIds.length || invalidStudent) {
+      return res.status(404).json({ success: false, message: 'One or more selected students are not enrolled in this subject branch/semester' });
+    }
+    if (students.some(student => isRestrictedForSubject(student, lecture.subject._id))) {
+      return res.status(403).json({ success: false, message: 'One or more selected profiles are restricted. Attendance cannot be marked for restricted profiles.' });
+    }
+
+    if (status === 'present') {
+      await Promise.all(students.map(student => (
+        Attendance.findOneAndUpdate(
+          { lecture: lecture._id, student: student._id },
+          {
+            $set: {
+              lecture: lecture._id,
+              subject: lecture.subject._id,
+              student: student._id,
+              status: 'present',
+              markedAt: new Date(),
+              faceVerified: false,
+              markedBy: 'admin',
+              faceConfidence: null,
+              verificationDetails: {}
+            },
+            $unset: {
+              capturedImagePath: '',
+              capturedImagePublicId: '',
+              codeUsed: ''
+            }
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        )
+      )));
+    } else {
+      const existingRecords = await Attendance.find({ lecture: lecture._id, student: { $in: students.map(student => student._id) } }).select('capturedImagePublicId');
+      await Promise.all(existingRecords
+        .filter(record => record.capturedImagePublicId)
+        .map(async record => {
+          try { await deleteImage(record.capturedImagePublicId); } catch (err) { console.error('Manual attendance image cleanup error:', err.message); }
+        }));
+      await Promise.all(students.map(student => (
+        Attendance.findOneAndUpdate(
+          { lecture: lecture._id, student: student._id },
+          {
+            $set: {
+              lecture: lecture._id,
+              subject: lecture.subject._id,
+              student: student._id,
+              status: 'absent',
+              markedAt: new Date(),
+              faceVerified: false,
+              markedBy: 'admin',
+              faceConfidence: null,
+              verificationDetails: {}
+            },
+            $unset: {
+              capturedImagePath: '',
+              capturedImagePublicId: '',
+              codeUsed: ''
+            }
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        )
+      )));
+    }
+
+    await Promise.all(students.map(student => logAudit(req, {
+      action: 'attendance.edited',
+      entityType: 'lecture',
+      entityId: lecture._id,
+      entityName: lecture.title,
+      targetDepartment: lecture.subject.department,
+      details: {
+        studentId: student._id,
+        studentName: student.name,
+        status,
+        bulkCount: students.length
+      }
+    })));
+
+    const payload = await buildLectureAttendancePayload(lecture);
+    const io = req.app.get('io');
+    if (io) {
+      const updatePayload = {
+        lectureId: lecture._id,
+        subjectId: lecture.subject._id,
+        studentIds: students.map(student => student._id),
+        status,
+        updatedBy: req.user._id,
+        stats: payload.stats,
+        timestamp: new Date()
+      };
+      io.to('admin_room').emit('attendance_updated', updatePayload);
+      io.to(adminDepartmentRoom(lecture.subject.department)).emit('attendance_updated', updatePayload);
+      io.to('admin_room').emit('lectures_changed', updatePayload);
+      io.to(adminDepartmentRoom(lecture.subject.department)).emit('lectures_changed', updatePayload);
+    }
+
+    res.json(payload);
+  } catch (err) {
+    console.error('updateLectureAttendanceStatus error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const importSubjectAttendance = async (req, res) => {
+  const filePath = req.file?.path;
+  try {
+    const { subjectId } = req.params;
+    const subject = await Subject.findById(subjectId).select('name code department branch semester assignedTeachers');
+    if (!ensureSubjectAccess(subject, req, res)) return;
+    if (!filePath) {
+      return res.status(400).json({ success: false, message: 'CSV or Excel file is required' });
+    }
+
+    const rows = await parseAttendanceImportRows(filePath, path.extname(req.file.originalname));
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'No attendance rows found in the file' });
+    }
+
+    const todayEnd = parseDateBoundary(new Date(), true);
+    const dateAliases = ['date', 'attendance date', 'lecture date', 'class date'];
+    const fallbackImportDate = rows
+      .map(row => parseImportDate(getRowValue(row, dateAliases)))
+      .find(Boolean);
+    if (!fallbackImportDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'The sheet must include a Date, Attendance Date, or Lecture Date column.'
+      });
+    }
+
+    const results = { imported: 0, present: 0, absent: 0, skipped: 0, lectures: 0, dates: [], errors: [], warnings: [] };
+    const addImportError = (row, message) => {
+      if (results.errors.length < 50) results.errors.push({ row, message });
+    };
+    const addImportWarning = (row, message) => {
+      if (results.warnings.length < 50) results.warnings.push({ row, message });
+    };
+    const rowsByDate = new Map();
+    const importStudentCache = new Map();
+
+    for (const row of rows) {
+      const importDate = parseImportDate(getRowValue(row, dateAliases)) || fallbackImportDate;
+      const dayStart = parseDateBoundary(importDate, false);
+      const dateKey = importDateKey(dayStart);
+      if (!dayStart || dayStart > todayEnd) {
+        results.skipped += 1;
+        addImportError(row.__rowNumber, 'Invalid or future attendance date');
+        continue;
+      }
+      if (!rowsByDate.has(dateKey)) rowsByDate.set(dateKey, { dayStart, rows: [] });
+      rowsByDate.get(dateKey).rows.push(row);
+    }
+
+    const touchedLectures = [];
+
+    for (const [, group] of rowsByDate) {
+      const { dayStart, rows: dateRows } = group;
+      const seenStudents = new Set();
+      const validMarks = [];
+
+      for (const row of dateRows) {
+        const key = rowStudentIdentifier(row);
+        const status = normalizeAttendanceStatus(getRowValue(row, ['status', 'attendance', 'mark', 'present/absent']));
+        if (!key) {
+          results.skipped += 1;
+          addImportWarning(row.__rowNumber, 'Missing studentId/email. Row ignored.');
+          continue;
+        }
+        if (!status) {
+          results.skipped += 1;
+          addImportWarning(row.__rowNumber, 'Status must be present or absent. Row ignored.');
+          continue;
+        }
+
+        const student = await findOrCreateImportStudent({ row, subject, req, warnings: results.warnings, cache: importStudentCache });
+        if (!student) {
+          results.skipped += 1;
+          addImportWarning(row.__rowNumber, 'Student could not be resolved. Row ignored.');
+          continue;
+        }
+        if (seenStudents.has(String(student._id))) {
+          results.skipped += 1;
+          addImportWarning(row.__rowNumber, 'Duplicate student row ignored for this date.');
+          continue;
+        }
+
+        seenStudents.add(String(student._id));
+        validMarks.push({ student, status });
+      }
+
+      if (!validMarks.length) continue;
+
+      const lecture = await findOrCreateImportedLecture({ subject, dayStart, req });
+      touchedLectures.push(lecture);
+      results.lectures += 1;
+      results.dates.push(dayStart.toISOString().slice(0, 10));
+
+      const operations = validMarks.map(({ student, status }) => ({
+        updateOne: {
+          filter: { lecture: lecture._id, student: student._id },
+          update: {
+            $set: {
+              lecture: lecture._id,
+              subject: subject._id,
+              student: student._id,
+              status,
+              markedAt: dayStart,
+              faceVerified: false,
+              markedBy: 'admin',
+              faceConfidence: null,
+              verificationDetails: {
+                faceMatch: false,
+                confidence: 0
+              },
+              isAutomatic: false
+            },
+            $unset: {
+              capturedImagePath: '',
+              capturedImagePublicId: '',
+              codeUsed: ''
+            }
+          },
+          upsert: true,
+          setDefaultsOnInsert: true
+        }
+      }));
+
+      if (operations.length) {
+        await Attendance.bulkWrite(operations, { ordered: false });
+      }
+
+      for (const { status } of validMarks) {
+        results.imported += 1;
+        results[status] += 1;
+      }
+    }
+
+    await logAudit(req, {
+      action: 'attendance.imported',
+      entityType: 'subject',
+      entityId: subject._id,
+      entityName: subject.name,
+      targetDepartment: subject.department,
+      details: {
+        lectureIds: touchedLectures.map(item => item._id),
+        dates: results.dates,
+        imported: results.imported,
+        skipped: results.skipped
+      }
+    });
+
+    const latestLecture = touchedLectures[touchedLectures.length - 1];
+    const payload = latestLecture
+      ? await buildLectureAttendancePayload(await latestLecture.populate('subject', 'name code department branch semester assignedTeachers'))
+      : { stats: null, lecture: null };
+    const io = req.app.get('io');
+    if (io) {
+      const updatePayload = {
+        lectureId: latestLecture?._id,
+        lectureIds: touchedLectures.map(item => item._id),
+        subjectId: subject._id,
+        imported: results.imported,
+        updatedBy: req.user._id,
+        stats: payload.stats,
+        timestamp: new Date()
+      };
+      io.to('admin_room').emit('attendance_updated', updatePayload);
+      io.to(adminDepartmentRoom(subject.department)).emit('attendance_updated', updatePayload);
+      io.to('admin_room').emit('lectures_changed', updatePayload);
+      io.to(adminDepartmentRoom(subject.department)).emit('lectures_changed', updatePayload);
+    }
+
+    res.json({
+      success: true,
+      message: `Imported ${results.imported} attendance records`,
+      lecture: payload.lecture,
+      stats: payload.stats,
+      importSummary: results
+    });
+  } catch (err) {
+    console.error('importSubjectAttendance error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  } finally {
+    cleanupFiles([filePath]);
+  }
+};
+
+const scheduleImportedAttendanceDeletion = async (req, res) => {
+  try {
+    const { subjectId } = req.params;
+    const { startDate, endDate } = req.body || {};
+    const subject = await Subject.findById(subjectId).select('name code department branch semester assignedTeachers');
+    if (!ensureSubjectAccess(subject, req, res)) return;
+    const start = parseDateBoundary(startDate, false);
+    const end = parseDateBoundary(endDate || startDate, true);
+    if (!start || !end || start > end) {
+      return res.status(400).json({ success: false, message: 'Select a valid date range.' });
+    }
+
+    const lectures = await Lecture.find({
+      subject: subject._id,
+      source: 'imported',
+      pendingDeletion: { $ne: true },
+      date: { $gte: start, $lte: end }
+    }).select('_id title date subject');
+
+    if (!lectures.length) {
+      return res.status(404).json({ success: false, message: 'No imported attendance found in this date range.' });
+    }
+
+    const batchId = crypto.randomUUID();
+    const batchName = `${subject.code || subject.name} imported attendance ${start.toISOString().slice(0, 10)} to ${end.toISOString().slice(0, 10)}`;
+    const now = new Date();
+    const deletions = [];
+    for (const lecture of lectures) {
+      const deletion = await schedulePendingDeletion({
+        resourceType: 'lecture',
+        resourceId: lecture._id,
+        resourceName: lecture.title,
+        targetDepartment: subject.department,
+        requestedBy: req.user._id,
+        batchId,
+        batchName,
+        batchCount: lectures.length
+      });
+      lecture.pendingDeletion = true;
+      lecture.deletionScheduledAt = now;
+      lecture.deletionExpiresAt = deletion.expiresAt;
+      await lecture.save();
+      deletions.push(deletion);
+    }
+
+    await logAudit(req, {
+      action: 'attendance.bulk_delete_scheduled',
+      entityType: 'subject',
+      entityId: subject._id,
+      entityName: subject.name,
+      targetDepartment: subject.department,
+      details: {
+        batchId,
+        count: lectures.length,
+        startDate: start,
+        endDate: end,
+        undoExpiresAt: deletions[0]?.expiresAt
+      }
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      const payload = { subjectId: subject._id, batchId, count: lectures.length, timestamp: new Date() };
+      io.to('admin_room').emit('lectures_changed', payload);
+      io.to(adminDepartmentRoom(subject.department)).emit('lectures_changed', payload);
+      io.to('admin_room').emit('pending_deletions_changed', payload);
+      io.to(adminDepartmentRoom(subject.department)).emit('pending_deletions_changed', payload);
+    }
+
+    res.json({
+      success: true,
+      message: `${lectures.length} imported attendance date${lectures.length === 1 ? '' : 's'} scheduled for deletion. Use Undo All to recover the full process.`,
+      batchId,
+      count: lectures.length,
+      undoExpiresAt: deletions[0]?.expiresAt
+    });
+  } catch (err) {
+    console.error('scheduleImportedAttendanceDeletion error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
 };
@@ -617,7 +1647,7 @@ const getAdminAttendanceByLecture = async (req, res) => {
 const downloadLectureAttendanceExcel = async (req, res) => {
   try {
     const { lectureId } = req.params;
-    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department semester');
+    const lecture = await Lecture.findById(lectureId).populate('subject', 'name code department branch semester assignedTeachers');
     if (!lecture) return res.status(404).json({ success: false, message: 'Lecture not found' });
     if (!lecture.subject) return res.status(404).json({ success: false, message: 'Lecture subject not found' });
     if (!(await ensureLectureAccess(lecture, req, res))) return;
@@ -626,18 +1656,21 @@ const downloadLectureAttendanceExcel = async (req, res) => {
       enrolledSubjects: lecture.subject._id,
       role: 'student',
       status: { $in: ['active', 'restricted', 'inactive'] }
-    }).select('name studentId department semester');
+    }).select('name studentId department branch semester');
+    const matchingStudents = enrolledStudents.filter(student => studentMatchesSubject(student, lecture.subject));
 
     const attendance = await Attendance.find({ lecture: lectureId })
-      .populate('student', 'name studentId department semester')
+      .populate('student', 'name studentId department branch semester')
       .sort({ markedAt: 1 });
 
     const attendanceMap = {};
     attendance.forEach(record => {
-      if (record.student?._id) attendanceMap[record.student._id.toString()] = record;
+      if (record.student?._id && studentMatchesSubject(record.student, lecture.subject) && record.status === 'present') {
+        attendanceMap[record.student._id.toString()] = record;
+      }
     });
 
-    const rows = enrolledStudents.map((student, index) => {
+    const rows = matchingStudents.map((student, index) => {
       const record = attendanceMap[student._id.toString()];
       return {
         'Sr. No.': index + 1,
@@ -658,8 +1691,8 @@ const downloadLectureAttendanceExcel = async (req, res) => {
       };
     });
 
-    const present = attendance.filter(record => record.student).length;
-    const total = enrolledStudents.length;
+    const present = Object.keys(attendanceMap).length;
+    const total = matchingStudents.length;
     const summaryRows = [
       { Field: 'Subject', Value: `${lecture.subject.name} (${lecture.subject.code})` },
       { Field: 'Lecture', Value: lecture.title },
@@ -671,7 +1704,7 @@ const downloadLectureAttendanceExcel = async (req, res) => {
       { Field: 'Attendance %', Value: total ? `${((present / total) * 100).toFixed(2)}%` : '0.00%' }
     ];
 
-    const workbook = XLSX.utils.book_new();
+    const workbook = new ExcelJS.Workbook();
     addSheet(workbook, summaryRows, 'Lecture Summary', [22, 35]);
     addSheet(workbook, rows, 'Attendance', [8, 15, 26, 20, 10, 14, 14, 28, 30, 12, 12, 12, 22, 16, 16]);
 
@@ -684,7 +1717,7 @@ const downloadLectureAttendanceExcel = async (req, res) => {
       targetDepartment: lecture.subject.department,
       details: { reportType: 'lecture_attendance', filename }
     });
-    sendWorkbook(res, workbook, filename);
+    await sendWorkbook(res, workbook, filename);
   } catch (err) {
     console.error('downloadLectureAttendanceExcel error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
@@ -705,7 +1738,7 @@ const downloadSessionAttendanceExcel = async (req, res) => {
     }
 
     const lectures = await Lecture.find(lectureQuery)
-      .populate('subject', 'name code department semester')
+      .populate('subject', 'name code department branch semester assignedTeachers')
       .sort({ date: 1, startTime: 1 });
 
     const studentQuery = {
@@ -713,13 +1746,14 @@ const downloadSessionAttendanceExcel = async (req, res) => {
       status: { $in: ['active', 'restricted', 'inactive'] }
     };
     if (subjectId) studentQuery.enrolledSubjects = subjectId;
+    else if (scopedSubjectIds?.length) studentQuery.enrolledSubjects = { $in: scopedSubjectIds };
     const adminDepartment = getAdminDepartment(req.user);
     if (adminDepartment) studentQuery.department = adminDepartment;
     const adminSemester = getAdminSemesterScope(req.user);
     if (adminSemester) studentQuery.semester = adminSemester;
 
-    const students = await User.find(studentQuery).populate('enrolledSubjects', 'name code department semester')
-      .select('name studentId department semester enrolledSubjects');
+    const students = await User.find(studentQuery).populate('enrolledSubjects', 'name code department branch semester')
+      .select('name studentId department branch semester enrolledSubjects');
 
     const attendanceFindQuery = scopedSubjectIds && !subjectId
       ? { subject: { $in: scopedSubjectIds } }
@@ -729,8 +1763,8 @@ const downloadSessionAttendanceExcel = async (req, res) => {
 
     const attendanceRecords = await Attendance.find(attendanceFindQuery)
       .populate('lecture', 'title date startTime endTime subject')
-      .populate('subject', 'name code')
-      .populate('student', 'name studentId')
+      .populate('subject', 'name code department branch semester assignedTeachers')
+      .populate('student', 'name studentId department branch semester')
       .sort({ markedAt: 1 });
 
     const attendanceMap = {};
@@ -745,12 +1779,17 @@ const downloadSessionAttendanceExcel = async (req, res) => {
 
     students.forEach((student, studentIndex) => {
       const enrolledIds = new Set((student.enrolledSubjects || []).map(subject => subject._id.toString()));
-      const studentLectures = lectures.filter(lecture => lecture.subject?._id && enrolledIds.has(lecture.subject._id.toString()));
+      const studentLectures = lectures.filter(lecture => (
+        lecture.subject?._id &&
+        enrolledIds.has(lecture.subject._id.toString()) &&
+        studentMatchesSubject(student, lecture.subject)
+      ));
       let presentCount = 0;
 
       studentLectures.forEach((lecture) => {
         const record = attendanceMap[`${student._id}_${lecture._id}`];
-        if (record) presentCount += 1;
+        const isPresent = record?.status === 'present';
+        if (isPresent) presentCount += 1;
         detailRows.push({
           'Student ID': student.studentId || '-',
           'Student Name': student.name,
@@ -762,7 +1801,7 @@ const downloadSessionAttendanceExcel = async (req, res) => {
           'Lecture': lecture.title,
           'Start Time': lecture.startTime,
           'End Time': lecture.endTime,
-          'Status': record ? 'Present' : 'Absent',
+          'Status': isPresent ? 'Present' : 'Absent',
           'Marked At': record ? formatDateTime(record.markedAt || record.createdAt) : '-',
           'Face Confidence': record?.faceConfidence ? `${record.faceConfidence.toFixed(1)}%` : '-'
         });
@@ -782,7 +1821,7 @@ const downloadSessionAttendanceExcel = async (req, res) => {
       });
     });
 
-    const workbook = XLSX.utils.book_new();
+    const workbook = new ExcelJS.Workbook();
     addSheet(workbook, summaryRows, 'Student Summary', [8, 15, 26, 20, 10, 15, 10, 10, 14]);
     addSheet(workbook, detailRows, 'Detailed Attendance', [15, 26, 20, 10, 14, 14, 28, 30, 12, 12, 12, 22, 16]);
 
@@ -799,7 +1838,7 @@ const downloadSessionAttendanceExcel = async (req, res) => {
       targetDepartment: getAdminDepartment(req.user) || 'All Departments',
       details: { reportType: subjectId ? 'subject_session_attendance' : 'session_attendance', filename }
     });
-    sendWorkbook(res, workbook, filename);
+    await sendWorkbook(res, workbook, filename);
   } catch (err) {
     console.error('downloadSessionAttendanceExcel error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
@@ -837,13 +1876,131 @@ const getSubjectAttendanceAnalytics = async (req, res) => {
   }
 };
 
+const getSubjectAttendanceHistory = async (req, res) => {
+  try {
+    const { subjectId } = req.params;
+    const { startDate, endDate, search } = req.query;
+    const subject = await Subject.findById(subjectId);
+    if (!ensureSubjectAccess(subject, req, res)) return;
+
+    const start = parseDateBoundary(startDate || new Date(new Date().setDate(new Date().getDate() - 30)));
+    const end = parseDateBoundary(endDate || new Date(), true);
+    if (!start || !end || start > end) {
+      return res.status(400).json({ success: false, message: 'Enter a valid date range.' });
+    }
+
+    const studentQuery = {
+      role: 'student',
+      status: { $in: ['active', 'restricted'] },
+      enrolledSubjects: subjectId
+    };
+    if (search) {
+      const regex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      studentQuery.$or = [{ name: regex }, { studentId: regex }, { email: regex }];
+    }
+
+    const [lectures, students] = await Promise.all([
+      Lecture.find({
+        subject: subjectId,
+        status: 'completed',
+        date: { $gte: start, $lte: end },
+        pendingDeletion: { $ne: true }
+      }).sort({ date: 1, startTime: 1, createdAt: 1 }),
+      User.find(studentQuery).select('name studentId email profileImage department semester status isRestricted restrictionReason subjectRestrictions').lean()
+    ]);
+    students.sort((a, b) => {
+      const series = studentIdSortValue(a.studentId) - studentIdSortValue(b.studentId);
+      if (series !== 0) return series;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+
+    const lectureIds = lectures.map(lecture => lecture._id);
+    const studentIds = students.map(student => student._id);
+    const records = lectureIds.length && studentIds.length
+      ? await Attendance.find({
+        subject: subjectId,
+        lecture: { $in: lectureIds },
+        student: { $in: studentIds },
+        status: 'present'
+      }).select('student lecture markedAt faceConfidence status')
+      : [];
+
+    const recordMap = new Map(records.map(record => [`${record.student}:${record.lecture}`, record]));
+    const studentRows = students.map(student => {
+      const lectureRecords = lectures.map(lecture => {
+        const record = recordMap.get(`${student._id}:${lecture._id}`);
+        return {
+          lectureId: lecture._id,
+          title: lecture.title,
+          date: lecture.date,
+          startTime: lecture.startTime,
+          status: record?.status === 'present' ? 'present' : 'absent',
+          markedAt: record?.markedAt || null,
+          faceConfidence: record?.faceConfidence || null
+        };
+      });
+      const present = lectureRecords.filter(item => item.status === 'present').length;
+      const total = lectureRecords.length;
+      return {
+        student,
+        present,
+        absent: Math.max(total - present, 0),
+        total,
+        percentage: total ? ((present / total) * 100).toFixed(1) : '0.0',
+        lectures: lectureRecords
+      };
+    });
+
+    const lectureSummaries = lectures.map(lecture => {
+      const present = students.filter(student => recordMap.has(`${student._id}:${lecture._id}`)).length;
+      const total = students.length;
+      return {
+        lecture,
+        present,
+        absent: Math.max(total - present, 0),
+        total,
+        percentage: total ? ((present / total) * 100).toFixed(1) : '0.0'
+      };
+    });
+
+    res.json({
+      success: true,
+      subject,
+      range: { startDate: start, endDate: end },
+      students: studentRows,
+      lectures: lectureSummaries,
+      summary: {
+        totalLectures: lectures.length,
+        totalStudents: students.length,
+        totalPresent: records.length,
+        totalPossible: lectures.length * students.length,
+        percentage: lectures.length && students.length
+          ? ((records.length / (lectures.length * students.length)) * 100).toFixed(1)
+          : '0.0'
+      }
+    });
+  } catch (err) {
+    console.error('getSubjectAttendanceHistory error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
 module.exports = {
   detectGuideFace,
   markAttendance,
   getStudentSubjectAttendance,
   downloadAttendanceExcel,
   getAdminAttendanceByLecture,
+  updateLectureAttendanceStatus,
+  importSubjectAttendance,
+  scheduleImportedAttendanceDeletion,
   downloadLectureAttendanceExcel,
   downloadSessionAttendanceExcel,
-  getSubjectAttendanceAnalytics
+  getSubjectAttendanceAnalytics,
+  getSubjectAttendanceHistory,
+  createAttendanceDispute,
+  getAttendanceDisputes,
+  resolveAttendanceDispute,
+  deleteAttendanceDispute,
+  deleteAttendanceDisputes
 };

@@ -1,141 +1,460 @@
-# FaceAttend — Attendance Management System 
+# StudySphere - Smart Attendance and LMS Platform
 
-## Python Version
-> ⚠️  Use **Python 3.13** (or 3.11/3.12). Previous versions used `dlib` + `face-recognition` +
-> `mediapipe` which all fail on 3.13. This version uses **InsightFace + ONNX Runtime** instead.
+StudySphere is a full-stack attendance management and learning management platform for colleges and departments. It combines face-based attendance, academic structure management, teacher/student dashboards, subject classrooms, LMS content, realtime notifications, room chat, quizzes, and reporting in one MERN application.
 
----
+The LMS is attached directly to the existing academic hierarchy:
 
-## 1 — Backend (Node.js)
+```text
+Course -> Branch -> Semester -> Subject -> Teachers / Students
+```
+
+Every subject can work as a classroom with attendance, materials, assignments, quizzes, announcements, doubts, calendar events, and analytics.
+
+## Push-Ready Notes
+
+- Do not commit `.env` files, local media, generated exports, logs, caches, or build output.
+- Uploaded media should be stored in Cloudinary or another cloud provider, not in local `uploads`, `captures`, `chat-media`, or LMS media folders.
+- MongoDB remains the source of truth. Redis is optional and should only be used as a cache/temp-data layer.
+- The app should continue working if Redis is disabled with `CACHE_ENABLED=false`.
+- Before pushing, run the build/check commands in the **Pre-Push Checklist** section.
+
+## Current Capabilities
+
+### Attendance
+
+- Face-based student registration and login support through the ML service.
+- Lecture creation, start/stop attendance, and lecture-wise attendance records.
+- Subject-wise attendance history, date-range filtering, Excel export, and imported attendance support.
+- Attendance disputes with admin/teacher resolution.
+- Low-attendance monitoring and notifications.
+
+### LMS Classrooms
+
+- Shared `Subject Classroom` page for admin, teacher, and student roles.
+- Classroom tabs: Overview, Attendance, Materials, Assignments, Quizzes, Calendar, Doubts, and Analytics.
+- Student view is scoped to enrolled subjects.
+- Teacher view is scoped to assigned subjects.
+- Department admin view is scoped to department subjects.
+- Students do not see classroom analytics; analytics are for staff/admin workflows.
+
+### Materials
+
+- Teacher/admin can organize material in folders, create material as draft, publish it later, and delete it.
+- Supports uploaded files and links such as PDF, image, video, Excel, and notes.
+- Materials can be tagged by topic/unit such as `Unit 1`, `SDLC`, or `Agile`.
+- Published material is reflected to target students through realtime updates.
+
+### Assignments
+
+- Teacher/admin can create assignments as drafts and publish later.
+- Supports title, instructions, due date, marks, topic tags, attachments, and submission mode.
+- Submission mode can be `offline` or `online`.
+- Offline assignments do not show file upload controls on the student side.
+- Once a student marks/submits an assignment, it is locked from further editing.
+- Staff can view submissions, grade, provide feedback, and release results.
+- Assignment cards include submission counts and staff submission views.
+
+### Quizzes
+
+- Teacher/admin can create quizzes manually or import from CSV/XLSX.
+- Manual quiz creation supports editable question/options and variable option count.
+- Import format supports question, options, and correct option.
+- Quizzes can be drafted, published, attempted, closed, and released.
+- Quiz controls include timer support, shuffled question order, tab-switch warnings, and one-question-at-a-time mode.
+- Active quiz cards expand for better attempt UX.
+- After release, students can review selected answers, correct answers, and explanations where available.
+- After release or expiry, completed quizzes cannot be attempted again.
+- Teacher/admin can view marks for each student after release.
+
+### LMS Calendar
+
+- Calendar shows assignment dates, assignment deadlines, quiz open/close dates, and announcements.
+- Dots indicate event types and active/deadline states.
+- Active assignment/quiz dots blink until the deadline or close time is reached.
+- Clicking a date shows the events scheduled for that date.
+- Lectures are intentionally excluded from the LMS calendar.
+
+### Doubts and Discussions
+
+- Students can create doubts inside a subject classroom.
+- Teacher/admin can reply, resolve, and delete discussions.
+- Students receive notifications when a staff member replies.
+- Teacher dashboard can surface open/unread doubts.
+
+### Realtime Notifications
+
+- Socket.IO is used for role-scoped realtime updates.
+- Redux Toolkit and RTK Query are used on the frontend for shared API cache/state, request reuse, and targeted invalidation.
+- Students receive realtime updates for published materials, assignments, quizzes, announcements, grades, and discussion replies.
+- Teacher profiles do not receive a popup for every individual assignment/quiz submission.
+- Teachers receive one summary notification when an assignment deadline or quiz close time is reached.
+- Deadline summaries use readable assignment/quiz names and real completion counts.
+
+### Dashboards
+
+- Student dashboard includes attendance progress, enrolled subjects, pending LMS work, recent materials, grades, and quiz/assignment state.
+- Teacher dashboard includes lectures, assigned subjects, low attendance, pending submissions, quiz summaries, and doubts.
+- Department admin dashboard includes LMS overview, classroom monitoring, teacher activity, assignment/quiz completion, and announcement moderation.
+- Super admin manages global system scope and academic/admin controls.
+
+### UI and UX
+
+- Responsive dark-themed interface built with React, Tailwind CSS, Framer Motion, and Lucide icons.
+- Mobile views use smaller cards/text, horizontal scrolling where needed, and compact action icons.
+- Classroom metric cards are compact and horizontally scrollable on mobile.
+- Assignment and quiz cards use responsive grids with scroll behavior on smaller screens.
+- Loading states are shown near the data being fetched instead of relying on a global top progress line.
+- Browser zoom is disabled at the app shell level for consistent layout behavior.
+
+## Tech Stack
+
+### Frontend
+
+- React 18
+- Vite
+- Tailwind CSS
+- React Router
+- Redux Toolkit and RTK Query
+- Axios
+- Socket.IO Client
+- Framer Motion
+- Lucide React
+- Recharts
+- React Hot Toast
+
+### Backend
+
+- Node.js
+- Express
+- MongoDB with Mongoose
+- JWT authentication
+- Socket.IO
+- Redis cache support
+- Multer uploads
+- ExcelJS import/export
+- Nodemailer
+- Helmet, CORS, rate limiting, and validation middleware
+
+### ML Service
+
+- Python FastAPI
+- InsightFace and ONNX Runtime
+- OpenCV and NumPy
+- Liveness checks and face matching helpers
+- Optional AI analysis hooks
+
+## Project Structure
+
+```text
+studysphere/
+  backend/              Express API, Socket.IO, MongoDB models
+  frontend/             React + Vite application
+  ml-service/           FastAPI face recognition and liveness service
+  docker-compose.yml    Optional containerized local stack
+  README.md
+```
+
+## Prerequisites
+
+- Node.js 18 or newer
+- npm
+- MongoDB local instance or MongoDB Atlas URI
+- Python 3.11, 3.12, or 3.13 for the ML service
+- Optional: Docker and Docker Compose
+
+## Environment Variables
+
+Create environment files in each service as needed.
+
+### Backend `.env`
+
+```env
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/attendance_system
+JWT_SECRET=change_this_secret
+JWT_EXPIRE=7d
+FRONTEND_URL=http://localhost:5173
+ML_SERVICE_URL=http://localhost:8000
+
+# Optional ML keep-alive ping from the Node backend
+ML_KEEPALIVE_ENABLED=false
+ML_KEEPALIVE_URL=https://face-attend-ml-backend.onrender.com
+ML_KEEPALIVE_INTERVAL_MS=60000
+ML_KEEPALIVE_TIMEOUT_MS=10000
+
+# Optional Mongo tuning
+DNS_SERVERS=1.1.1.1,8.8.8.8
+MONGO_MAX_POOL_SIZE=50
+MONGO_MIN_POOL_SIZE=5
+
+# Optional mail/cloud integrations
+EMAIL_HOST=
+EMAIL_PORT=
+EMAIL_USER=
+EMAIL_PASS=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+CLOUDINARY_FOLDER=studysphere
+
+# Optional Redis cache
+REDIS_URL=redis://127.0.0.1:6379
+CACHE_ENABLED=true
+CACHE_DEFAULT_TTL_SECONDS=60
+
+# Seed defaults
+ADMIN_EMAIL=admin@school.edu
+ADMIN_PASSWORD=Admin@123456
+ADMIN_NAME=System Administrator
+DEPARTMENT_ADMIN_PASSWORD=Dept@123456
+```
+
+### Redis Notes
+
+Redis is optional. Use it for caching dashboards, classroom summaries, notification counts, chat summaries, OTP/temp data, and future Socket.IO scaling. Do not use Redis as the primary database.
+
+For local development without Redis:
+
+```env
+CACHE_ENABLED=false
+```
+
+For a hosted Redis provider such as Upstash, use the Redis database connection string in `REDIS_URL`. It usually starts with `redis://` or `rediss://`. Do not paste a `redis-cli ...` command into `REDIS_URL`.
+
+Example:
+
+```env
+REDIS_URL=rediss://default:<password>@<host>:6379
+CACHE_ENABLED=true
+```
+
+If your local network blocks the hosted Redis TCP connection, keep `CACHE_ENABLED=false` locally and enable Redis only in deployment.
+
+### Frontend `.env`
+
+```env
+VITE_API_URL=http://localhost:5000/api
+VITE_SOCKET_URL=http://localhost:5000
+```
+
+If the frontend is served behind the same domain/proxy as the backend, both frontend values can be omitted because the app falls back to `/api` and `/`.
+
+### ML Service `.env`
+
+```env
+PORT=8000
+FACE_RECOGNITION_TOLERANCE=0.42
+FACE_RECOGNITION_MODEL=large
+LIVENESS_THRESHOLD=0.60
+MIN_FACE_CONFIDENCE=0.55
+
+# Optional AI assistant integration
+ANTHROPIC_API_KEY=
+```
+
+## Local Setup
+
+### 1. Backend
 
 ```bash
 cd backend
-cp .env.example .env        # fill in MONGO_URI, JWT_SECRET, ML_SERVICE_URL, FRONTEND_URL
 npm install
-npm run seed                # creates default admin: admin@faceattend.com / admin123
-npm run dev                 # http://localhost:5000
+npm run seed
+npm run dev
 ```
 
----
+Backend runs on:
 
-## 2 — Frontend (React + Vite)
+```text
+http://localhost:5000
+```
+
+### 2. Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev                 # http://localhost:5173
+npm run dev
 ```
 
----
+Frontend runs on:
 
-## 3 — ML Service (Python 3.13)
+```text
+http://localhost:5173
+```
 
-### Step 1 — Create virtual environment
+### 3. ML Service
 
 ```bash
 cd ml-service
-python -m venv venv
-
-# macOS / Linux
-source venv/bin/activate
-
-# Windows
-venv\Scripts\activate
-```
-
-### Step 2 — Install all dependencies (no compiler needed!)
-
-```bash
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-InsightFace installs via pre-built ONNX wheels. No CMake, no C++ compiler, no dlib required.
-
-### Step 3 — Configure environment
-
-```bash
-cp .env.example .env
-# Set ANTHROPIC_API_KEY if you want the AI analysis feature (optional)
-```
-
-### Step 4 — Start the ML service
-
-```bash
 python main.py
 ```
 
-Or with uvicorn directly:
+Or run with Uvicorn:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Expected startup output:
-```
-✅ LivenessDetector initialized (vectorised OpenCV/NumPy)
-✅ BodyLanguageAnalyzer initialized (OpenCV Haar + HOG)
-✅ ImageProcessor initialized
-✅ InsightFace loaded successfully
-✅ FaceAnalyzer ready (InsightFace / CPU)
-🚀 Starting FaceAttend ML Service v3.0 on port 8000
-🐍 Python 3.13 compatible — using InsightFace + ONNX Runtime
+ML service runs on:
+
+```text
+http://localhost:8000
 ```
 
-> On first run, InsightFace will download the `buffalo_sc` model (~20 MB) automatically.
+## Docker Setup
 
----
+The repository includes a `docker-compose.yml` for MongoDB, backend, frontend, and ML service.
 
-## Backend .env
-
-```
-PORT=5000
-MONGO_URI=mongodb://localhost:27017/attendance_db
-JWT_SECRET=change_this_to_something_long_and_random
-JWT_EXPIRE=7d
-ML_SERVICE_URL=http://localhost:8000
-FRONTEND_URL=http://localhost:5173
-NODE_ENV=development
-ADMIN_EMAIL=admin@school.edu
-ADMIN_PASSWORD=Admin@123456
-ADMIN_NAME=System Administrator
-DEPARTMENT_ADMIN_PASSWORD=Dept@123456
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-CLOUDINARY_FOLDER=faceattend
+```bash
+docker compose up --build
 ```
 
-Student profile photos and verified attendance captures are uploaded to Cloudinary. The backend keeps only Cloudinary URLs/public IDs in MongoDB and uses temporary local files only while validating or uploading images.
+Default exposed services:
 
-Department admin accounts are created by `npm run seed`:
+```text
+Frontend:   http://localhost:5173
+Backend:    http://localhost:5000
+ML Service: http://localhost:8000
+MongoDB:    localhost:27017
+```
 
-| Department | Email |
-|---|---|
-| Computer Science | cse.admin@school.edu |
-| Information Technology | it.admin@school.edu |
-| Electronics | electronics.admin@school.edu |
-| Mechanical | mechanical.admin@school.edu |
-| Civil | civil.admin@school.edu |
-| Chemical | chemical.admin@school.edu |
-| Electrical | electrical.admin@school.edu |
+To start only Redis from Docker Compose:
 
-All department admins use `DEPARTMENT_ADMIN_PASSWORD` by default and can manage only their own department's students, subjects, lectures, attendance, and analytics.
+```bash
+docker compose up -d redis
+```
 
----
+Docker Desktop must be running before this command is used.
 
-## All Bugs Fixed in v3.0
+## Useful Commands
 
-| # | Bug | Fix |
-|---|-----|-----|
-| 1 | Lectures not showing on student dashboard | `getDashboard` now returns `allLectures` + `upcomingLectures`. Dashboard UI has a new "Recent Lectures" card |
-| 2 | Socket join fires before user loads | `SocketContext` now waits for `user._id` before connecting |
-| 3 | `GET /subjects/my-subjects` hits `/:id` route | Static routes placed before parameterised in all route files |
-| 4 | `reject` used `DELETE` with body (stripped by some clients) | Changed to `PUT /students/:id/reject` in route + frontend |
-| 5 | `subjectController` had no try/catch | Full error handling added |
-| 6 | `dlib` / `face-recognition` / `mediapipe` fail on Python 3.13 | Replaced with InsightFace + ONNX Runtime (no compiler, works on 3.13) |
-| 7 | Liveness detector Python pixel loop (timeout) | Fully vectorised NumPy LBP — 100-500× faster |
-| 8 | MediaPipe body language fails on 3.13 | Replaced with OpenCV Haar cascade + HOG detector |
-| 9 | AI assistant blocks FastAPI event loop | All Anthropic SDK calls run via `asyncio.to_thread()` |
-| 10 | Controllers missing try/catch | All controllers now have full error handling |
-| 11 | Null io guard missing | All socket emits guarded with `if (io)` |
-| 12 | Notification route ordering bug | Static routes before `/:id/read` |
+### Backend
+
+```bash
+cd backend
+npm run dev
+npm start
+npm run seed
+npm run sync:subjects
+npm audit --audit-level=moderate
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm run dev
+npm run build
+npm run preview
+npm audit --audit-level=moderate
+```
+
+### Backend Syntax Check
+
+```bash
+cd backend
+node --check server.js
+```
+
+## LMS Workflow
+
+1. Admin creates course, branch, semester, subject, and assigns a teacher.
+2. Teacher opens the subject classroom from the Subjects page.
+3. Teacher creates material, assignment, quiz, or announcement as draft.
+4. Teacher publishes when ready.
+5. Enrolled students receive realtime updates without refreshing.
+6. Students view material, submit assignments, attempt quizzes, and ask doubts.
+7. Teacher grades submissions or releases quiz results.
+8. Student dashboards and classroom views update with the latest LMS state.
+
+## Quiz Import Format
+
+CSV/XLSX quiz import should include these columns:
+
+```text
+Question, Option 1, Option 2, Option 3, Option 4, Correct Option
+```
+
+The correct option should match one of the provided options. Manual quiz creation remains available and supports adding or removing options per question.
+
+## Sample Data Files
+
+The repository contains sample import files that can be used for testing:
+
+```text
+Project_Management_SDLC_Quiz_15Q.xlsx
+Project_Management_Attendance_Import.xlsx
+Students_Sem6_BTech_ComputerScience_Import.xlsx
+VIT_CSE_Timetable.xlsx
+```
+
+## Testing Checklist
+
+Use this checklist after major changes:
+
+- Frontend build passes with `npm run build`.
+- Backend starts without syntax/runtime errors.
+- Backend and frontend audits pass with no moderate-or-higher vulnerabilities.
+- Student can access only enrolled subject classrooms.
+- Teacher can manage only assigned subject classrooms.
+- Department admin can manage only department-scoped subjects.
+- Material draft, publish, delete, and realtime student update work.
+- Assignment draft, publish, online/offline submission, lock after submit, grading, feedback, and release work.
+- Quiz draft, manual creation, CSV/XLSX import, publish, attempt, close, auto-release, release review, and teacher marks view work.
+- Calendar displays assignment, quiz, and announcement events with correct dot indicators.
+- Discussion create, reply, resolve, delete, and reply notification work.
+- Deadline summary notifications show readable item names and real `submitted/total` or `attempted/total` counts.
+- Attendance history date-range fetch shows local loading and returns correct records.
+- Mobile subject cards, dashboard cards, classroom tabs, and submission modals do not overlap.
+
+## Pre-Push Checklist
+
+Run these before pushing code:
+
+```bash
+cd frontend
+npm run build
+```
+
+```bash
+cd backend
+node --check server.js
+npm audit --audit-level=moderate
+```
+
+```bash
+cd frontend
+npm audit --audit-level=moderate
+```
+
+Then confirm:
+
+- `.env` files are not staged.
+- Local uploads/exports are not staged.
+- `frontend/dist`, `backend/uploads`, `backend/exports`, caches, and logs are not staged.
+- The backend starts with Redis enabled and also works with `CACHE_ENABLED=false`.
+- Login works for student, teacher, department admin, and super admin accounts used in testing.
+
+## Security Notes
+
+- Replace default secrets and passwords before production use.
+- Keep `.env` files out of version control.
+- Use HTTPS in production for camera, biometric, and auth flows.
+- Use a strong `JWT_SECRET`.
+- Restrict CORS origins to trusted frontend domains.
+- Keep MongoDB credentials private and rotate them if exposed.
+
+## Production Notes
+
+- Build the frontend with `npm run build`.
+- Run the backend with `NODE_ENV=production`.
+- Configure Cloudinary for all uploaded media; the app does not serve local upload folders.
+- Configure Redis only through secure environment variables.
+- Configure reverse proxy routes for `/api` and Socket.IO.
+- Keep the ML service close to the backend for lower latency.
+- Add a `/health` monitor for the ML service and use an uptime monitor or paid always-on hosting to avoid cold starts.
+- Monitor scheduled notification jobs for assignment/quiz deadlines and reminders.

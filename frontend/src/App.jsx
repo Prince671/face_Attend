@@ -1,14 +1,15 @@
 import React, { Suspense, lazy, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
+import RealtimeBridge from './features/realtime/realtimeBridge';
 import { setAppNavigate } from './utils/navigation';
-import { PageLoader } from './components/LoadingStates';
+import { AppShellSkeleton, AuthPageSkeleton, PageLoader } from './components/LoadingStates';
 
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
 
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
@@ -17,10 +18,14 @@ const AdminStudentDetail = lazy(() => import('./pages/admin/AdminStudentDetail')
 const AdminSubjects = lazy(() => import('./pages/admin/AdminSubjects'));
 const AdminLectures = lazy(() => import('./pages/admin/AdminLectures'));
 const AdminLectureDetail = lazy(() => import('./pages/admin/AdminLectureDetail'));
+const AdminTeachers = lazy(() => import('./pages/admin/AdminTeachers'));
+const TeacherDirectory = lazy(() => import('./pages/admin/TeacherDirectory'));
 const AdminAnalytics = lazy(() => import('./pages/admin/AdminAnalytics'));
 const AdminNotifications = lazy(() => import('./pages/admin/AdminNotifications'));
 const AdminAuditLogs = lazy(() => import('./pages/admin/AdminAuditLogs'));
 const AdminTimetable = lazy(() => import('./pages/admin/AdminTimetable'));
+const TeacherProfile = lazy(() => import('./pages/admin/TeacherProfile'));
+const SubjectClassroom = lazy(() => import('./pages/shared/SubjectClassroom'));
 
 const StudentLayout = lazy(() => import('./pages/student/StudentLayout'));
 const StudentDashboard = lazy(() => import('./pages/student/StudentDashboard'));
@@ -31,67 +36,74 @@ const StudentNotifications = lazy(() => import('./pages/student/StudentNotificat
 const StudentIdCard = lazy(() => import('./pages/student/StudentIdCard'));
 const StudentTimetable = lazy(() => import('./pages/student/StudentTimetable'));
 const StudentProfile = lazy(() => import('./pages/student/StudentProfile'));
+const StudentRooms = lazy(() => import('./pages/student/StudentRooms'));
 
 const ProtectedRoute = ({ children, role }) => {
   const { user, loading } = useAuth();
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="flex flex-col items-center gap-4"
-      >
-        <div className="w-10 h-10 border-2 border-primary-500/30 border-t-primary-500 rounded-full animate-spin" />
-        <motion.p
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.12 }}
-          className="text-sm text-slate-400"
-        >
-          Preparing your workspace...
-        </motion.p>
-      </motion.div>
-    </div>
-  );
+  if (loading) return <AppShellSkeleton />;
   if (!user) return <Navigate to="/login" replace />;
-  if (role && user.role !== role) return <Navigate to={user.role === 'admin' ? '/admin' : '/student'} replace />;
+  const allowedRoles = Array.isArray(role) ? role : (role ? [role] : []);
+  if (allowedRoles.length && !allowedRoles.includes(user.role)) {
+    return <Navigate to={['admin', 'teacher'].includes(user.role) ? '/admin' : '/student'} replace />;
+  }
   return children;
 };
 
 const PublicRoute = ({ children }) => {
   const { user } = useAuth();
-  if (user) return <Navigate to={user.role === 'admin' ? '/admin' : '/student'} replace />;
+  if (user) return <Navigate to={['admin', 'teacher'].includes(user.role) ? '/admin' : '/student'} replace />;
   return children;
 };
 
+const AdminIndex = () => {
+  return <AdminDashboard />;
+};
+
+const RouteSuspenseFallback = () => {
+  const { pathname } = useLocation();
+  if (pathname.startsWith('/login')) return <AuthPageSkeleton mode="login" />;
+  if (pathname.startsWith('/register')) return <AuthPageSkeleton mode="register" />;
+  if (pathname.startsWith('/forgot-password')) return <AuthPageSkeleton mode="forgot" />;
+  if (pathname.startsWith('/admin') || pathname.startsWith('/student')) return <AppShellSkeleton compactSidebar={pathname.startsWith('/student')} />;
+  return <PageLoader label="Loading page..." />;
+};
+
 const AppRoutes = () => (
-  <Suspense fallback={<PageLoader label="Loading page..." />}>
+  <Suspense fallback={<RouteSuspenseFallback />}>
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+      <Route path="/forgot-password" element={<PublicRoute><ForgotPasswordPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
       
       {/* Admin Routes */}
-      <Route path="/admin" element={<ProtectedRoute role="admin"><AdminLayout /></ProtectedRoute>}>
-        <Route index element={<AdminDashboard />} />
-        <Route path="students" element={<AdminStudents />} />
-        <Route path="students/:id" element={<AdminStudentDetail />} />
+      <Route path="/admin" element={<ProtectedRoute role={['admin', 'teacher']}><AdminLayout /></ProtectedRoute>}>
+        <Route index element={<AdminIndex />} />
+        <Route path="students" element={<ProtectedRoute role={['admin', 'teacher']}><AdminStudents /></ProtectedRoute>} />
+        <Route path="students/:id" element={<ProtectedRoute role="admin"><AdminStudentDetail /></ProtectedRoute>} />
+        <Route path="teachers" element={<ProtectedRoute role="admin"><AdminTeachers /></ProtectedRoute>} />
+        <Route path="teacher-directory" element={<ProtectedRoute role="teacher"><TeacherDirectory /></ProtectedRoute>} />
+        <Route path="teacher-directory/:id" element={<ProtectedRoute role="teacher"><TeacherDirectory /></ProtectedRoute>} />
         <Route path="subjects" element={<AdminSubjects />} />
+        <Route path="subjects/:subjectId/classroom" element={<SubjectClassroom />} />
         <Route path="lectures" element={<AdminLectures />} />
         <Route path="lectures/:id" element={<AdminLectureDetail />} />
-        <Route path="timetable" element={<AdminTimetable />} />
-        <Route path="analytics" element={<AdminAnalytics />} />
-        <Route path="audit-logs" element={<AdminAuditLogs />} />
+        <Route path="timetable" element={<ProtectedRoute role="admin"><AdminTimetable /></ProtectedRoute>} />
+        <Route path="analytics" element={<ProtectedRoute role="admin"><AdminAnalytics /></ProtectedRoute>} />
+        <Route path="audit-logs" element={<ProtectedRoute role="admin"><AdminAuditLogs /></ProtectedRoute>} />
         <Route path="notifications" element={<AdminNotifications />} />
+        <Route path="profile" element={<ProtectedRoute role="teacher"><TeacherProfile /></ProtectedRoute>} />
       </Route>
       
       {/* Student Routes */}
       <Route path="/student" element={<ProtectedRoute role="student"><StudentLayout /></ProtectedRoute>}>
         <Route index element={<StudentDashboard />} />
         <Route path="subjects" element={<StudentSubjects />} />
+        <Route path="subjects/:subjectId/classroom" element={<SubjectClassroom />} />
         <Route path="attendance/:subjectId" element={<StudentAttendance />} />
         <Route path="mark-attendance" element={<MarkAttendance />} />
         <Route path="timetable" element={<StudentTimetable />} />
+        <Route path="rooms" element={<StudentRooms />} />
         <Route path="id-card" element={<StudentIdCard />} />
         <Route path="profile" element={<StudentProfile />} />
         <Route path="notifications" element={<StudentNotifications />} />
@@ -128,6 +140,7 @@ export default function App() {
   return (
     <AuthProvider>
       <SocketProvider>
+        <RealtimeBridge />
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <NavigationBridge />
           <Toaster

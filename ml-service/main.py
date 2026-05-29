@@ -42,7 +42,7 @@ from utils.ai_assistant      import AIAssistant
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="FaceAttend ML Service",
+    title="StudySphere ML Service",
     description="Face recognition & biometric analysis for attendance — Python 3.13 compatible",
     version="3.0.0"
 )
@@ -268,10 +268,17 @@ async def health():
     if FACE_RECOGNITION_AVAILABLE:
         services.insert(0, "face_recognition (InsightFace)")
     return {
-        "status": "healthy",
+        "success": True,
+        "service": "ml",
+        "status": "ready",
         "face_recognition_available": FACE_RECOGNITION_AVAILABLE,
         "services": services,
     }
+
+
+@app.get("/heath")
+async def health_typo_alias():
+    return await health()
 
 
 # ── /validate-face ────────────────────────────────────────────────────────────
@@ -606,6 +613,7 @@ async def analyze_with_ai(
 async def analyze_timetable(
     image:      UploadFile = File(...),
     department: str        = Form(default=""),
+    semester:   str        = Form(default=""),
 ):
     try:
         contents = await image.read()
@@ -614,7 +622,7 @@ async def analyze_timetable(
         if len(contents) / (1024 * 1024) > MAX_FILE_SIZE_MB:
             raise ValueError(f"File too large (max {MAX_FILE_SIZE_MB} MB)")
         b64 = base64.b64encode(contents).decode("utf-8")
-        analysis = await ai_assistant.analyze_timetable_image(b64, department, image.content_type or "image/jpeg")
+        analysis = await ai_assistant.analyze_timetable_image(b64, department, image.content_type or "image/jpeg", semester)
         if analysis.get("available") is False:
             return JSONResponse(status_code=503, content={
                 "success": False,
@@ -650,7 +658,7 @@ async def global_exception_handler(request, exc):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    logger.info(f"🚀 Starting FaceAttend ML Service v3.0 on port {port}")
+    logger.info(f"🚀 Starting StudySphere ML Service v3.0 on port {port}")
     logger.info(f"🐍 Python 3.13 compatible — using InsightFace + ONNX Runtime")
     logger.info(f"📡 InsightFace: {'✅ ready' if FACE_RECOGNITION_AVAILABLE else '❌ not installed — run: pip install insightface onnxruntime'}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

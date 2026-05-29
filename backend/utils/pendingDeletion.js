@@ -4,8 +4,9 @@ const Subject = require('../models/Subject');
 const Lecture = require('../models/Lecture');
 const Attendance = require('../models/Attendance');
 const { deleteImage } = require('./cloudinary');
+const { syncSubjectEnrollment } = require('./subjectEnrollment');
 
-const UNDO_WINDOW_MINUTES = Number(process.env.DELETE_UNDO_WINDOW_MINUTES || 10);
+const UNDO_WINDOW_MINUTES = Number(process.env.DELETE_UNDO_WINDOW_MINUTES || 15);
 
 const getUndoExpiry = () => new Date(Date.now() + UNDO_WINDOW_MINUTES * 60 * 1000);
 
@@ -19,7 +20,7 @@ const cleanupCloudinaryPublicIds = async (publicIds = []) => {
   }
 };
 
-const schedulePendingDeletion = async ({ resourceType, resourceId, resourceName, targetDepartment, requestedBy }) => {
+const schedulePendingDeletion = async ({ resourceType, resourceId, resourceName, targetDepartment, requestedBy, batchId, batchName, batchCount }) => {
   const expiresAt = getUndoExpiry();
   await PendingDeletion.updateMany(
     { resourceType, resourceId, status: 'pending' },
@@ -31,6 +32,9 @@ const schedulePendingDeletion = async ({ resourceType, resourceId, resourceName,
     resourceId,
     resourceName,
     targetDepartment,
+    batchId,
+    batchName,
+    batchCount,
     requestedBy,
     expiresAt
   });
@@ -61,25 +65,39 @@ const undoPendingDeletion = async (id, actor) => {
     await Lecture.findByIdAndUpdate(deletion.resourceId, clear);
   } else if (deletion.resourceType === 'subject') {
     await Subject.findByIdAndUpdate(deletion.resourceId, { ...clear, isActive: true });
-    const subject = await Subject.findById(deletion.resourceId).select('department semester');
+    const subject = await Subject.findById(deletion.resourceId);
     if (subject) {
-      await User.updateMany(
-        {
-          role: 'student',
-          status: 'active',
-          pendingDeletion: { $ne: true },
-          department: subject.department,
-          semester: Number(subject.semester)
-        },
-        { $addToSet: { enrolledSubjects: subject._id } }
-      );
+      await syncSubjectEnrollment(subject);
     }
+  } else if (deletion.resourceType === 'teacher') {
+    await User.findByIdAndUpdate(deletion.resourceId, clear);
   }
 
   deletion.status = 'undone';
   deletion.undoneAt = new Date();
   await deletion.save();
   return deletion;
+};
+
+const undoPendingDeletionBatch = async (batchId, actor) => {
+  const deletions = await PendingDeletion.find({
+    batchId,
+    status: 'pending',
+    expiresAt: { $gt: new Date() }
+  }).sort({ createdAt: 1 });
+
+  if (!deletions.length) {
+    const err = new Error('Undo is no longer available for this delete-all request.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const restored = [];
+  for (const deletion of deletions) {
+    restored.push(await undoPendingDeletion(deletion._id, actor));
+  }
+
+  return restored;
 };
 
 const finalizeStudentDeletion = async (deletion) => {
@@ -126,10 +144,21 @@ const finalizeSubjectDeletion = async (deletion) => {
   await Subject.findByIdAndDelete(deletion.resourceId);
 };
 
+const finalizeTeacherDeletion = async (deletion) => {
+  const teacher = await User.findById(deletion.resourceId);
+  if (!teacher) return;
+  await Subject.updateMany(
+    { assignedTeachers: teacher._id },
+    { $pull: { assignedTeachers: teacher._id } }
+  );
+  await User.findByIdAndDelete(teacher._id);
+};
+
 const finalizePendingDeletion = async (deletion) => {
   if (deletion.resourceType === 'student') await finalizeStudentDeletion(deletion);
   else if (deletion.resourceType === 'lecture') await finalizeLectureDeletion(deletion);
   else if (deletion.resourceType === 'subject') await finalizeSubjectDeletion(deletion);
+  else if (deletion.resourceType === 'teacher') await finalizeTeacherDeletion(deletion);
 
   deletion.status = 'completed';
   deletion.completedAt = new Date();
@@ -157,5 +186,6 @@ module.exports = {
   UNDO_WINDOW_MINUTES,
   schedulePendingDeletion,
   undoPendingDeletion,
+  undoPendingDeletionBatch,
   processExpiredPendingDeletions
 };

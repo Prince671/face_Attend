@@ -1,24 +1,16 @@
-# ── Core web framework ────────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
 python-multipart
 
-# ── Computer vision ───────────────────────────────────────────────────────────
 opencv-python-headless
 numpy
 Pillow
 scipy
 scikit-learn
 
-# ── InsightFace — replaces dlib + face-recognition, supports Python 3.13 ─────
-# No compiler needed. Installs via pre-built wheels.
 insightface
-onnxruntime          # CPU inference engine for InsightFace models
+onnxruntime
 
-# ── Async / utils ─────────────────────────────────────────────────────────────
 aiofiles
 python-dotenv
 requests
-
-# ── Anthropic AI (optional) ───────────────────────────────────────────────────
-anthropic

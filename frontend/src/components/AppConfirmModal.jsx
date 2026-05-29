@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, LogOut, Trash2, X } from 'lucide-react';
 
@@ -21,14 +22,14 @@ export default function AppConfirmModal({
 }) {
   const Icon = iconMap[tone] || AlertTriangle;
 
-  return (
+  const modal = (
     <AnimatePresence>
       {open && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4"
+          className="app-modal-backdrop"
         >
           <motion.div
             initial={{ opacity: 0, y: 18, scale: 0.96 }}
@@ -71,4 +72,6 @@ export default function AppConfirmModal({
       )}
     </AnimatePresence>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
 }

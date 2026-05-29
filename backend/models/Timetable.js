@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const slotSchema = new mongoose.Schema({
   day: { type: String, required: true },
   semester: { type: Number, required: true, min: 1, max: 8 },
+  branch: { type: String, default: '', trim: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
   title: { type: String },
   startTime: { type: String, required: true },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -7,12 +7,28 @@ import { authAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import ThemeToggle from '../../components/ThemeToggle';
 import FaceLoginModal from '../../components/FaceLoginModal';
+import { AuthButtonSkeleton } from '../../components/LoadingStates';
 import {
   BIOMETRIC_CREDENTIAL_KEY,
   isWebAuthnSupported,
   prepareRequestOptions,
   serializeAssertionCredential
 } from '../../utils/webauthn';
+
+const AUTH_FEATURES = [
+  {
+    title: 'Smart face recognition',
+    description: 'Verify students quickly with AI-assisted face matching and liveness-aware attendance flows.'
+  },
+  {
+    title: 'Department-ready controls',
+    description: 'Manage subjects, teachers, lectures, timetables, and notifications in one clean academic workspace.'
+  },
+  {
+    title: 'Real-time attendance insight',
+    description: 'Track attendance updates, alerts, and reports instantly across student, teacher, and admin dashboards.'
+  }
+];
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -22,12 +38,20 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [faceLoginOpen, setFaceLoginOpen] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const [activeFeature, setActiveFeature] = useState(0);
   const showBiometricLogin = isWebAuthnSupported() && Boolean(localStorage.getItem(BIOMETRIC_CREDENTIAL_KEY));
 
   const fieldMotion = {
     initial: { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 }
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveFeature(previous => (previous + 1) % AUTH_FEATURES.length);
+    }, 3200);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -37,7 +61,7 @@ export default function LoginPage() {
       login(res.data.token, res.data.user);
       if (res.data.requiresAdminScope) sessionStorage.removeItem('adminScopeSelected');
       toast.success(`Welcome back, ${res.data.user.name}!`);
-      navigate(res.data.user.role === 'admin' ? '/admin' : '/student');
+      navigate(['admin', 'teacher'].includes(res.data.user.role) ? '/admin' : '/student');
     } catch (err) {
       toast.error(err.response?.data?.message || 'Login failed');
     } finally {
@@ -83,66 +107,107 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="auth-login-page min-h-screen flex items-center justify-center relative overflow-hidden">
-      <ThemeToggle className="fixed right-4 top-4 z-20" />
-      {/* Background */}
+    <div className="auth-login-page min-h-dvh flex items-center justify-center relative overflow-hidden px-3 py-6">
+      <ThemeToggle className="fixed right-3 top-3 z-20 scale-90 sm:right-4 sm:top-4 sm:scale-100" />
       <div className="auth-login-bg absolute inset-0">
-        {/* Grid */}
         <div className="auth-login-grid absolute inset-0"
           style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
       </div>
-
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="relative z-10 w-full max-w-md mx-4"
+        className="relative z-10 grid w-full max-w-6xl items-center gap-6 lg:grid-cols-[1.05fr_0.95fr]"
       >
-        {/* Logo */}
-        <motion.div className="text-center mb-8" initial="initial" animate="animate">
-          <motion.div
-            className="auth-login-logo inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
-            variants={fieldMotion}
-            transition={{ duration: 0.32 }}
-            whileHover={{ scale: 1.04, rotate: 1 }}
-          >
-            <Scan className="w-8 h-8 text-primary-400" />
-          </motion.div>
-          <motion.h1 className="auth-login-title font-display text-3xl font-bold" variants={fieldMotion} transition={{ duration: 0.32, delay: 0.05 }}>FaceAttend</motion.h1>
-          <motion.p className="auth-login-subtitle mt-1" variants={fieldMotion} transition={{ duration: 0.32, delay: 0.1 }}>AI-Powered Attendance Management</motion.p>
+        <motion.div className="glass-card hidden min-h-[520px] overflow-hidden p-8 lg:flex lg:flex-col lg:justify-between" initial="initial" animate="animate">
+          <div>
+            <motion.div
+              className="auth-login-logo mb-7 inline-flex h-16 w-16 items-center justify-center rounded-2xl"
+              variants={fieldMotion}
+              transition={{ duration: 0.32 }}
+              whileHover={{ scale: 1.04, rotate: 1 }}
+            >
+              <Scan className="h-8 w-8 text-primary-300" />
+            </motion.div>
+            <motion.h1 className="auth-login-title font-display text-5xl font-bold leading-tight" variants={fieldMotion} transition={{ duration: 0.32, delay: 0.05 }}>StudySphere</motion.h1>
+            <motion.p className="auth-login-subtitle mt-3 text-lg" variants={fieldMotion} transition={{ duration: 0.32, delay: 0.1 }}>Attendance, classrooms, and conversations in one place</motion.p>
+          </div>
+
+          <div className="relative rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <div className="absolute -right-16 -top-16 h-36 w-36 rounded-full bg-primary-500/20 blur-3xl" />
+            <motion.div
+              key={activeFeature}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.35 }}
+              className="relative"
+            >
+              <p className="text-xs uppercase tracking-[0.28em] text-primary-300">Feature {activeFeature + 1}</p>
+              <h2 className="mt-3 text-2xl font-semibold text-white">{AUTH_FEATURES[activeFeature].title}</h2>
+              <p className="mt-3 max-w-md text-sm leading-6 text-slate-300">{AUTH_FEATURES[activeFeature].description}</p>
+            </motion.div>
+            <div className="mt-5 flex gap-2">
+              {AUTH_FEATURES.map((_, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => setActiveFeature(index)}
+                  className={`h-1.5 rounded-full transition-all ${activeFeature === index ? 'w-9 bg-primary-400' : 'w-4 bg-white/20 hover:bg-white/40'}`}
+                  aria-label={`Show feature ${index + 1}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-xs text-slate-300">
+            {['Face ID', 'Biometric', 'Live alerts'].map(item => (
+              <div key={item} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center">{item}</div>
+            ))}
+          </div>
         </motion.div>
 
-        {/* Card */}
-        <motion.div className="auth-login-card glass-card" whileHover={{ y: -2 }} transition={{ duration: 0.2 }}>
-          <motion.h2 className="auth-login-heading text-xl font-semibold mb-6" {...fieldMotion} transition={{ delay: 0.12 }}>Sign In</motion.h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
+        <motion.div className="auth-login-card auth-login-compact glass-card mx-auto w-full max-w-sm" whileHover={{ y: -2 }} transition={{ duration: 0.2 }}>
+          <div className="mb-5 text-center lg:hidden">
+            <div className="auth-login-logo mx-auto mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl">
+              <Scan className="h-6 w-6 text-primary-400" />
+            </div>
+            <h1 className="auth-login-title font-display text-2xl font-bold">StudySphere</h1>
+            <p className="auth-login-subtitle mt-0.5 text-xs">Campus learning workspace</p>
+          </div>
+          <motion.h2 className="auth-login-heading mb-4 text-lg font-semibold" {...fieldMotion} transition={{ delay: 0.12 }}>Sign In</motion.h2>
+          <form onSubmit={handleSubmit} className="space-y-3">
             <motion.div {...fieldMotion} transition={{ delay: 0.16 }}>
-              <label className="label">Email Address</label>
+              <label className="label">Email Address / Student ID</label>
               <input
                 type="text"
-                inputMode="email"
-                autoComplete="email"
+                autoComplete="username"
                 className="input-field"
-                placeholder="you@school.edu"
+                placeholder="you@school.edu or 0302CS243D08"
                 value={form.email}
                 onChange={e => setForm({ ...form, email: e.target.value })}
                 required
               />
             </motion.div>
             <motion.div {...fieldMotion} transition={{ delay: 0.2 }}>
-              <label className="label">Password</label>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <label className="label mb-0">Password</label>
+                <Link to="/forgot-password" className="text-xs font-medium text-primary-300 transition-colors hover:text-primary-200">
+                  Forgot Password?
+                </Link>
+              </div>
               <div className="relative">
                 <input
                   type={showPass ? 'text' : 'password'}
-                  className="input-field pr-12"
-                  placeholder="••••••••"
+                  className="input-field pr-11"
+                  placeholder="********"
                   value={form.password}
                   onChange={e => setForm({ ...form, password: e.target.value })}
                   required
                 />
                 <button type="button" onClick={() => setShowPass(!showPass)}
                   className="auth-login-eye absolute right-3 top-1/2 -translate-y-1/2 transition-colors">
-                  {showPass ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </motion.div>
@@ -150,22 +215,16 @@ export default function LoginPage() {
             <motion.button
               type="submit"
               disabled={loading}
-              className={`btn-primary w-full mt-2 ${loading ? 'action-pulse' : ''}`}
+              className={`btn-primary mt-1 w-full ${loading ? 'action-pulse' : ''}`}
               whileHover={{ scale: loading ? 1 : 1.01 }}
               whileTap={{ scale: 0.98 }}
             >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Signing in...
-                </span>
-              ) : 'Sign In'}
+              {loading ? <AuthButtonSkeleton /> : 'Sign In'}
             </motion.button>
-
           </form>
 
-          <motion.div className="auth-login-divider mt-6 pt-6" {...fieldMotion} transition={{ delay: 0.24 }}>
-            <div className="mb-4 flex items-center gap-3 text-xs uppercase tracking-wide text-slate-500">
+          <motion.div className="auth-login-divider mt-4 pt-4" {...fieldMotion} transition={{ delay: 0.24 }}>
+            <div className="mb-3 flex items-center gap-3 text-[10px] uppercase tracking-wide text-slate-500 sm:text-xs">
               <span className="h-px flex-1 bg-slate-700" />
               <span>Student Face ID</span>
               <span className="h-px flex-1 bg-slate-700" />
@@ -187,14 +246,13 @@ export default function LoginPage() {
                 disabled={biometricLoading}
                 className={`btn-primary flex w-full items-center justify-center gap-2 ${biometricLoading ? 'action-pulse' : ''}`}
               >
-                {biometricLoading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <Fingerprint className="h-4 w-4" />}
-                {biometricLoading ? 'Checking biometric...' : 'Login with Biometric'}
+                {biometricLoading ? <AuthButtonSkeleton /> : <><Fingerprint className="h-4 w-4" /> Login with Biometric</>}
               </button>
             </motion.div>
           )}
 
-          <motion.div className="auth-login-divider mt-6 pt-6 text-center" {...fieldMotion} transition={{ delay: 0.25 }}>
-            <p className="auth-login-register text-sm">
+          <motion.div className="auth-login-divider mt-4 pt-4 text-center" {...fieldMotion} transition={{ delay: 0.25 }}>
+            <p className="auth-login-register text-xs sm:text-sm">
               Don't have an account?{' '}
               <Link to="/register" className="text-primary-400 hover:text-primary-300 font-medium transition-colors">
                 Register as Student
@@ -202,9 +260,9 @@ export default function LoginPage() {
             </p>
           </motion.div>
 
-          <motion.div className="auth-login-secure mt-4 flex items-center gap-2 rounded-xl p-3" {...fieldMotion} transition={{ delay: 0.3 }}>
-            <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-            <p className="text-xs">Secured with face recognition & end-to-end encryption</p>
+          <motion.div className="auth-login-secure mt-3 flex items-center gap-2 rounded-lg p-2.5" {...fieldMotion} transition={{ delay: 0.3 }}>
+            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" />
+            <p className="text-[11px] sm:text-xs">Secured with face recognition & end-to-end encryption</p>
           </motion.div>
         </motion.div>
       </motion.div>

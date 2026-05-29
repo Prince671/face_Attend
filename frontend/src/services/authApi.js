@@ -1,0 +1,1 @@
+export { useGetMeQuery } from './apiSlice';

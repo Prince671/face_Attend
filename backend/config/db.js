@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
+const dns = require('dns');
 
 mongoose.set('strictQuery', true);
+dns.setServers((process.env.DNS_SERVERS || '1.1.1.1,8.8.8.8').split(',').map((server) => server.trim()));
 
 const connectDB = async () => {
   try {
@@ -10,6 +12,7 @@ const connectDB = async () => {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       maxPoolSize,
       minPoolSize,
+      family: 4,
       serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 10000),
       socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),
     });

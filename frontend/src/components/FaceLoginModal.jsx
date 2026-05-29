@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import Webcam from 'react-webcam';
 import toast from 'react-hot-toast';
 import { Camera, RefreshCw, ScanFace, X } from 'lucide-react';
 import { authAPI } from '../services/api';
 
-const AUTO_CAPTURE_READY_FRAMES = 2;
+const AUTO_CAPTURE_READY_FRAMES = 1;
 const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
-const PASSPORT_WIDTH = 480;
-const PASSPORT_HEIGHT = 640;
-const CAPTURE_QUALITY = 0.78;
-const LIVENESS_FRAME_COUNT = 4;
-const LIVENESS_FRAME_INTERVAL_MS = 260;
+const PASSPORT_WIDTH = 360;
+const PASSPORT_HEIGHT = 480;
+const CAPTURE_QUALITY = 0.72;
+const LIVENESS_FRAME_COUNT = 3;
+const LIVENESS_FRAME_INTERVAL_MS = 140;
 const CAMERA_CONSTRAINTS = {
   facingMode: 'user',
   width: { ideal: 640, max: 640 },
@@ -245,7 +246,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
     const detector = FaceDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
     if (!detector) setStatus('Move your face inside the oval');
 
-    const detectionIntervalMs = detector ? 280 : 1800;
+    const detectionIntervalMs = detector ? 180 : 1400;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || captureInProgress.current) return;
@@ -331,11 +332,11 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
     };
   }, [cameraReady, isFaceInsideGuide, open, probeGuideFaceWithML, submitFaceLogin, submitting]);
 
-  return (
+  const modal = (
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm"
+          className="app-modal-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -419,4 +420,6 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
       )}
     </AnimatePresence>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
 }
