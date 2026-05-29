@@ -676,7 +676,7 @@ export default function AdminLectureDetail() {
             <button onClick={() => setDeleteModalOpen(true)} className="btn-danger flex items-center gap-2">
               <Trash2 className="w-4 h-4" /> Delete Lecture
             </button>
-            {!lecture.attendanceOpen && lecture.status !== 'completed' && (
+            {!lecture.attendanceOpen && !['completed', 'cancelled'].includes(lecture.status) && (
               <button onClick={() => handleStart()} disabled={actionLoading} className="btn-success flex items-center gap-2">
                 <Play className="w-4 h-4" /> Start Attendance
               </button>
@@ -886,7 +886,7 @@ export default function AdminLectureDetail() {
               )}
             </div>
           </div>
-          <div className="card-strip lg:block lg:max-h-80 lg:space-y-2 lg:overflow-y-auto">
+          <div className="card-strip lecture-attendance-student-list lg:block lg:max-h-80 lg:space-y-2 lg:overflow-y-auto">
             {filteredAttendance.map(a => {
               const restricted = isRestrictedProfile(a.student, lecture?.subject?._id);
               return (
@@ -979,7 +979,7 @@ export default function AdminLectureDetail() {
               )}
             </div>
           </div>
-          <div className="card-strip lg:block lg:max-h-80 lg:space-y-2 lg:overflow-y-auto">
+          <div className="card-strip lecture-attendance-student-list lg:block lg:max-h-80 lg:space-y-2 lg:overflow-y-auto">
             {filteredAbsent.map(s => {
               const restricted = isRestrictedProfile(s, lecture?.subject?._id);
               return (

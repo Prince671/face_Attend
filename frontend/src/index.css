@@ -574,6 +574,10 @@ html.light .auth-login-secure {
     @apply grid grid-cols-3 gap-2 lg:block lg:space-y-3;
   }
 
+  .lecture-today-list {
+    @apply grid-cols-1;
+  }
+
   .subject-summary-list {
     @apply max-h-[19.25rem] overflow-y-auto pr-1;
     scrollbar-width: thin;
@@ -1373,6 +1377,20 @@ html.light .mobile-bottom-nav {
     min-width: 12.75rem;
   }
 
+  .lecture-attendance-student-list {
+    display: block !important;
+    max-height: 15.75rem;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+    scrollbar-width: thin;
+  }
+
+  .lecture-attendance-student-list > * {
+    min-width: 0 !important;
+    width: 100%;
+    margin-bottom: 0.5rem;
+  }
+
   .compact-card {
     padding: 0.875rem;
   }
@@ -2152,6 +2170,48 @@ html.light .app-topbar button svg {
     padding: 0.58rem 0.7rem !important;
   }
 
+  .input-field.pl-8,
+  input.pl-8,
+  textarea.pl-8 {
+    padding-left: 2rem !important;
+  }
+
+  .input-field.pl-9,
+  input.pl-9,
+  textarea.pl-9 {
+    padding-left: 2.25rem !important;
+  }
+
+  .input-field.pl-10,
+  input.pl-10,
+  textarea.pl-10 {
+    padding-left: 2.5rem !important;
+  }
+
+  .input-field.pl-11,
+  input.pl-11,
+  textarea.pl-11 {
+    padding-left: 2.75rem !important;
+  }
+
+  .input-field.pr-9,
+  input.pr-9,
+  textarea.pr-9 {
+    padding-right: 2.25rem !important;
+  }
+
+  .input-field.pr-10,
+  input.pr-10,
+  textarea.pr-10 {
+    padding-right: 2.5rem !important;
+  }
+
+  .input-field.pr-11,
+  input.pr-11,
+  textarea.pr-11 {
+    padding-right: 2.75rem !important;
+  }
+
   .badge,
   .badge-info,
   .badge-success,
@@ -2306,13 +2366,20 @@ html.light .app-topbar button svg {
   animation: roomQrScan 1.15s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 
+.room-qr-scan-line-complete {
+  animation: none;
+  top: calc(100% - 2.5rem);
+  background: #34d399;
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.9);
+}
+
 @keyframes roomQrScan {
   from {
-    transform: translateY(0);
+    top: 2.5rem;
     opacity: 0.5;
   }
   to {
-    transform: translateY(calc(100vw - 9rem));
+    top: calc(100% - 2.5rem);
     opacity: 1;
   }
 }
@@ -2366,6 +2433,69 @@ html.light .student-rooms textarea {
 
 html.light .student-rooms textarea::placeholder {
   color: #64748b !important;
+}
+
+@media (max-width: 640px) {
+  .lecture-today-list {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+  }
+
+  .lecture-today-list > * {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .lecture-today-list .glass-card,
+  .lecture-today-list .compact-card {
+    width: 100% !important;
+  }
+
+  .attendance-history-controls {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 0.5rem !important;
+    align-items: stretch !important;
+  }
+
+  .attendance-history-controls .attendance-history-date {
+    grid-column: span 2 / span 2 !important;
+    height: 2.75rem !important;
+    min-width: 0 !important;
+    padding-left: 0.65rem !important;
+    padding-right: 0.45rem !important;
+    font-size: 0.78rem !important;
+  }
+
+  .attendance-history-controls .attendance-history-search {
+    grid-column: span 3 / span 3 !important;
+    min-width: 0 !important;
+  }
+
+  .attendance-history-controls .attendance-history-search .input-field {
+    height: 2.75rem !important;
+    min-width: 0 !important;
+    font-size: 0.82rem !important;
+  }
+
+  .attendance-history-controls .attendance-history-view {
+    grid-column: span 1 / span 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 2.75rem !important;
+    min-height: 2.75rem !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    border-radius: 0.75rem !important;
+  }
+
+  .attendance-history-controls .attendance-history-view svg {
+    width: 0.9rem !important;
+    height: 0.9rem !important;
+  }
 }
 
 /* Camera overlay */

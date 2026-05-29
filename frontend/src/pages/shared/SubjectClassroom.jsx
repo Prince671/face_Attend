@@ -325,6 +325,7 @@ export default function SubjectClassroom() {
   const [attendanceManagerOpen, setAttendanceManagerOpen] = useState(false);
   const [attendanceImportOpen, setAttendanceImportOpen] = useState(false);
   const [attendanceDeleteOpen, setAttendanceDeleteOpen] = useState(false);
+  const [attendanceHistoryOpen, setAttendanceHistoryOpen] = useState(true);
   const [attendanceImportFile, setAttendanceImportFile] = useState(null);
   const [attendanceImporting, setAttendanceImporting] = useState(false);
   const [attendanceDeleteRange, setAttendanceDeleteRange] = useState({ startDate: '', endDate: '' });
@@ -2293,6 +2294,8 @@ export default function SubjectClassroom() {
                     if (!nextOpen) {
                       setAttendanceImportOpen(false);
                       setAttendanceDeleteOpen(false);
+                    } else {
+                      setAttendanceHistoryOpen(true);
                     }
                     return nextOpen;
                   });
@@ -2311,6 +2314,11 @@ export default function SubjectClassroom() {
               <button type="button" onClick={() => setAttendanceDeleteOpen(open => !open)} className="btn-secondary inline-flex items-center justify-center gap-2 text-red-200">
                 <Trash2 className="h-4 w-4" /> Delete imported
               </button>
+              {!attendanceHistoryOpen && (
+                <button type="button" onClick={() => setAttendanceHistoryOpen(true)} className="btn-secondary inline-flex items-center justify-center gap-2">
+                  <CalendarDays className="h-4 w-4" /> Attendance history
+                </button>
+              )}
               <button type="button" onClick={fetchSubjectDisputes} disabled={disputeLoading} className="btn-secondary inline-flex items-center justify-center gap-2 disabled:opacity-60">
                 <RefreshCw className={`h-4 w-4 ${disputeLoading ? 'animate-spin' : ''}`} /> Refresh disputes
               </button>
@@ -2347,7 +2355,7 @@ export default function SubjectClassroom() {
           </section>
         )}
 
-        {isStaff && attendanceManagerOpen && (
+        {isStaff && attendanceManagerOpen && attendanceHistoryOpen && (
           <section className="glass-card">
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -2358,14 +2366,19 @@ export default function SubjectClassroom() {
                   {historySort ? `Sorted by attendance percentage ${historySort === 'desc' ? 'high to low' : 'low to high'}.` : 'Students are sorted by the numeric series in their student ID.'}
                 </p>
               </div>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-[auto_auto_minmax(220px,1fr)_auto]">
-                <input className="input-field" type="date" value={historyRange.startDate} onChange={e => setHistoryRange({ ...historyRange, startDate: e.target.value })} />
-                <input className="input-field" type="date" value={historyRange.endDate} onChange={e => setHistoryRange({ ...historyRange, endDate: e.target.value })} />
-                <div className="relative">
+              <button type="button" onClick={() => setAttendanceHistoryOpen(false)} className="btn-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-xs">
+                <X className="h-4 w-4" /> Close
+              </button>
+            </div>
+            <div className="mb-4">
+              <div className="attendance-history-controls grid grid-cols-2 gap-2 md:grid-cols-[auto_auto_minmax(220px,1fr)_auto]">
+                <input className="input-field attendance-history-date min-w-0" type="date" value={historyRange.startDate} onChange={e => setHistoryRange({ ...historyRange, startDate: e.target.value })} />
+                <input className="input-field attendance-history-date min-w-0" type="date" value={historyRange.endDate} onChange={e => setHistoryRange({ ...historyRange, endDate: e.target.value })} />
+                <div className="attendance-history-search relative min-w-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input className="input-field pl-9" placeholder="Search name, ID, or email" value={historySearch} onChange={e => setHistorySearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') fetchSubjectHistory(); }} />
                 </div>
-                <button type="button" onClick={fetchSubjectHistory} disabled={historyLoading} className="icon-action bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-60" title="View history" aria-label="View history">
+                <button type="button" onClick={fetchSubjectHistory} disabled={historyLoading} className="icon-action attendance-history-view bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-60" title="View history" aria-label="View history">
                   {historyLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>

@@ -1101,7 +1101,11 @@ const joinByInvite = async (req, res) => {
     if (req.user.department !== base.department || Number(req.user.semester) !== Number(base.semester)) {
       return res.status(403).json({ success: false, message: 'This invite is only for students in the same semester.' });
     }
-    const existing = await ChatGroupMember.findOne({ group: group._id, user: req.user._id, isActive: true });
+    const existing = await ChatGroupMember.findOne({ group: group._id, user: req.user._id });
+    if (existing?.isActive) {
+      const summary = await groupSummary(group, req.user._id);
+      return res.json({ success: true, group: summary, alreadyMember: true, message: 'You are already a member of this room.' });
+    }
     if (!existing && group.inviteRequireApproval) {
       await ChatJoinRequest.updateOne(
         { group: group._id, user: req.user._id, status: 'pending' },
@@ -1113,7 +1117,7 @@ const joinByInvite = async (req, res) => {
     }
     await ChatGroupMember.updateOne(
       { group: group._id, user: req.user._id },
-      { isActive: true, role: 'member', joinedAt: new Date(), leftAt: null },
+      { isActive: true, role: existing?.role || 'member', joinedAt: new Date(), leftAt: null },
       { upsert: true }
     );
     if (!existing) {

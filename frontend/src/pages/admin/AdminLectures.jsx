@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Plus, Video, Play, Square, ChevronRight, Calendar, Folder, FolderOpen, Download, ArrowLeft, Monitor, Building2, GraduationCap, Search, X, Filter } from 'lucide-react';
+import { Plus, Video, Play, Square, ChevronRight, Calendar, Folder, FolderOpen, Download, ArrowLeft, Monitor, Building2, GraduationCap, Search, X, Filter, Eye } from 'lucide-react';
 import { adminAPI, lectureAPI, subjectAPI, attendanceAPI, holidayAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
@@ -653,15 +653,15 @@ export default function AdminLectures() {
             </div>
 
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1.5fr_auto]">
-                <input className="input-field" type="date" value={historyRange.startDate} onChange={e => setHistoryRange({ ...historyRange, startDate: e.target.value })} />
-                <input className="input-field" type="date" value={historyRange.endDate} onChange={e => setHistoryRange({ ...historyRange, endDate: e.target.value })} />
-                <div className="relative">
+              <div className="attendance-history-controls grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-[1fr_1fr_1.5fr_auto]">
+                <input className="input-field attendance-history-date min-w-0" type="date" value={historyRange.startDate} onChange={e => setHistoryRange({ ...historyRange, startDate: e.target.value })} />
+                <input className="input-field attendance-history-date min-w-0" type="date" value={historyRange.endDate} onChange={e => setHistoryRange({ ...historyRange, endDate: e.target.value })} />
+                <div className="attendance-history-search relative min-w-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input className="input-field pl-9" placeholder="Search student name, ID, or email" value={historySearch} onChange={e => setHistorySearch(e.target.value)} />
                 </div>
-                <button onClick={fetchHistory} disabled={historyLoading} className={`btn-primary whitespace-nowrap ${historyLoading ? 'action-pulse' : ''}`}>
-                  {historyLoading ? 'Loading...' : 'View'}
+                <button onClick={fetchHistory} disabled={historyLoading} className={`btn-primary attendance-history-view whitespace-nowrap ${historyLoading ? 'action-pulse' : ''}`} title="View attendance history" aria-label="View attendance history">
+                  {historyLoading ? <span className="hidden sm:inline">Loading...</span> : <><Eye className="h-4 w-4" /><span className="hidden sm:inline">View</span></>}
                 </button>
               </div>
 
@@ -760,6 +760,10 @@ export default function AdminLectures() {
                   Select a date range and press View to load previous attendance.
                 </div>
               )}
+
+              <button type="button" onClick={() => setHistoryOpen(false)} className="btn-secondary w-full justify-center">
+                Close Attendance History
+              </button>
             </div>
           </motion.div>
         </motion.div>
@@ -1116,7 +1120,7 @@ export default function AdminLectures() {
           )}
 
           {selectedFolder && (
-            <div className="three-card-list">
+            <div className="three-card-list lecture-today-list">
             {displayLectures.map((lec, i) => (
             <motion.div key={lec._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
               className="glass-card compact-card min-h-[9.5rem] hover:border-white/10 border border-transparent transition-all lg:min-h-0">

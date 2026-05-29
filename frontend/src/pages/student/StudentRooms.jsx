@@ -187,6 +187,19 @@ const buildMessagePreview = (text = '') => {
   return { preview, isLong: lines.length > 7 || String(text).length > 520 };
 };
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const messageUrlPattern = /((?:https?:\/\/|www\.)[^\s<>()]+[^\s<>().,!?:;"'])/gi;
+const normalizedHref = (value = '') => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+const renderMarqueeName = (name = '', className = '') => {
+  const label = String(name || '').trim();
+  if (label.length > 24) {
+    return <marquee className={className} scrollamount="3" behavior="scroll">{label}</marquee>;
+  }
+  return <span className={className}>{label}</span>;
+};
 const inviteLinkForCode = (code = '') => {
   if (!code || typeof window === 'undefined') return code;
   return `${window.location.origin}/student/rooms?invite=${encodeURIComponent(code)}`;
@@ -390,6 +403,8 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
   const [error, setError] = useState('');
   const [manualCode, setManualCode] = useState('');
   const [scannerStatus, setScannerStatus] = useState('');
+  const [scanPhase, setScanPhase] = useState('idle');
+  const [scanAttempt, setScanAttempt] = useState(0);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -408,23 +423,25 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
       if (!code || stopped || detectedRef.current) return;
       detectedRef.current = true;
       setError('');
-      setScannerStatus('QR found. Joining room...');
+      setScanPhase('complete');
+      setScannerStatus('QR found. Scanning complete. Joining room...');
+      stop();
       const joined = await onDetected(code);
-      if (joined) {
-        stop();
-      } else if (!stopped) {
-        detectedRef.current = false;
-        setScannerStatus('Point the camera at the room QR.');
+      if (!joined) {
+        setError('QR was scanned, but this invite could not be joined. Check the invite or try again.');
+        setScannerStatus('');
       }
     };
 
     const start = async () => {
       detectedRef.current = false;
       setError('');
-      setScannerStatus('Starting camera...');
+      setScanPhase('starting');
+      setScannerStatus('');
       if (!navigator.mediaDevices?.getUserMedia) {
         setError('Camera scanning is not available in this browser. Enter the invite code manually.');
         setScannerStatus('');
+        setScanPhase('idle');
         return;
       }
 
@@ -446,60 +463,33 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
         }
-        setScannerStatus('Scanning...');
-
-        if (window.BarcodeDetector && videoRef.current) {
-          const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-          const nativeScan = async () => {
-            if (stopped || detectedRef.current || !videoRef.current) return;
-            try {
-              const codes = await detector.detect(videoRef.current);
-              const value = codes?.[0]?.rawValue;
-              if (value) {
-                await handleDetected(value);
-                return;
-              }
-            } catch (_) {}
-            frameRef.current = window.requestAnimationFrame(nativeScan);
-          };
-          nativeScan();
-        }
-
-        const [{ BrowserQRCodeReader }, { DecodeHintType, BarcodeFormat }] = await Promise.all([
-          import('@zxing/browser'),
-          import('@zxing/library'),
-        ]);
         if (stopped) return;
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
-        const reader = new BrowserQRCodeReader(hints, {
+        setScanPhase('scanning');
+        setScannerStatus('');
+
+        const { BrowserQRCodeReader } = await import('@zxing/browser');
+        if (stopped) return;
+        const reader = new BrowserQRCodeReader(undefined, {
           delayBetweenScanAttempts: 80,
-          delayBetweenScanSuccess: 120,
           tryPlayVideoTimeout: 1800,
         });
-        const controls = await reader.decodeFromStream(stream, videoRef.current, async (result) => {
-          if (stopped || detectedRef.current || !result) return;
-          const value = result.getText?.() || result.text || '';
-          if (value.trim()) await handleDetected(value);
-        });
-        if (stopped) {
-          controls.stop();
-          return;
-        }
-        scannerControlsRef.current = controls;
+        const result = await reader.decodeOnceFromStream(stream, videoRef.current);
+        if (stopped || detectedRef.current || !result) return;
+        const value = result.getText?.() || result.text || '';
+        if (value.trim()) await handleDetected(value);
       } catch (err) {
         const message = err?.name === 'NotAllowedError'
           ? 'Camera permission is required to scan a room QR.'
           : 'Could not start the QR scanner. Use HTTPS or localhost, allow camera access, or enter the invite code manually.';
         setError(message);
         setScannerStatus('');
+        setScanPhase('idle');
       }
     };
 
     start();
     return stop;
-  }, [open, onDetected]);
+  }, [open, onDetected, scanAttempt]);
 
   return (
     <FeaturePanel open={open} title="Scan Room QR" onClose={onClose}>
@@ -507,7 +497,7 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
         <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-slate-900">
           <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
           <div className="pointer-events-none absolute inset-8 rounded-3xl border-2 border-primary-300/80 shadow-[0_0_0_999px_rgba(2,6,23,0.32)]" />
-          <span className="room-qr-scan-line pointer-events-none absolute left-10 right-10 top-10 h-0.5 rounded-full bg-primary-200 shadow-[0_0_18px_rgba(165,180,252,0.9)]" />
+          <span className={`room-qr-scan-line pointer-events-none absolute left-10 right-10 top-10 h-0.5 rounded-full bg-primary-200 shadow-[0_0_18px_rgba(165,180,252,0.9)] ${scanPhase === 'complete' ? 'room-qr-scan-line-complete' : ''}`} />
           <span className="pointer-events-none absolute left-8 top-8 h-8 w-8 rounded-tl-3xl border-l-4 border-t-4 border-primary-200" />
           <span className="pointer-events-none absolute right-8 top-8 h-8 w-8 rounded-tr-3xl border-r-4 border-t-4 border-primary-200" />
           <span className="pointer-events-none absolute bottom-8 left-8 h-8 w-8 rounded-bl-3xl border-b-4 border-l-4 border-primary-200" />
@@ -516,6 +506,20 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
         </div>
         {scannerStatus && !error && <p className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{scannerStatus}</p>}
         {error && <p className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{error}</p>}
+        {(error || scanPhase === 'complete') && (
+          <button
+            type="button"
+            onClick={() => {
+              setScanAttempt(value => value + 1);
+              setError('');
+              setScannerStatus('');
+              setScanPhase('idle');
+            }}
+            className="btn-secondary w-full justify-center"
+          >
+            Scan again
+          </button>
+        )}
         <form
           className="flex gap-2"
           onSubmit={(event) => {
@@ -641,6 +645,7 @@ export default function StudentRooms() {
   const unreadDividerTimerRef = useRef(null);
   const openingUnreadCountRef = useRef(0);
   const composerInputRef = useRef(null);
+  const panelHistoryGuardRef = useRef(false);
 
   const activeGroup = useMemo(() => groups.find(group => String(group._id) === String(activeGroupId)), [groups, activeGroupId]);
   const myMembership = useMemo(() => activeGroup?.members?.find(member => String(memberUser(member)?._id) === String(user?._id)), [activeGroup, user?._id]);
@@ -724,29 +729,60 @@ export default function StudentRooms() {
   const renderTextWithMentions = useCallback((value = '') => {
     const textValue = String(value || '');
     if (!textValue) return null;
-    const fallback = () => textValue.split(/(@[^\s@]+)/g).map((part, index) => (
-      part.startsWith('@')
-        ? <span key={`${part}-${index}`} className="font-semibold text-emerald-300">{part}</span>
-        : part
-    ));
-    if (!mentionLabels.length) return fallback();
-    const pattern = new RegExp(`@(${mentionLabels.map(escapeRegExp).join('|')})(?=$|[\\s.,!?;:)\\]])`, 'gi');
-    const parts = [];
-    let lastIndex = 0;
-    let match = pattern.exec(textValue);
-    while (match) {
-      if (match.index > lastIndex) parts.push(textValue.slice(lastIndex, match.index));
-      parts.push(
-        <span key={`${match.index}-${match[0]}`} className="font-semibold text-emerald-300">
-          {match[0]}
-        </span>
+    const renderMentionParts = (segment = '', keyPrefix = 'text') => {
+      const fallback = () => segment.split(/(@[^\s@]+)/g).map((part, index) => (
+        part.startsWith('@')
+          ? <span key={`${keyPrefix}-mention-${index}-${part}`} className="font-semibold text-emerald-300">{part}</span>
+          : part
+      ));
+      if (!mentionLabels.length) return fallback();
+      const pattern = new RegExp(`@(${mentionLabels.map(escapeRegExp).join('|')})(?=$|[\\s.,!?;:)\\]])`, 'gi');
+      const parts = [];
+      let lastIndex = 0;
+      let match = pattern.exec(segment);
+      while (match) {
+        if (match.index > lastIndex) parts.push(segment.slice(lastIndex, match.index));
+        parts.push(
+          <span key={`${keyPrefix}-mention-${match.index}-${match[0]}`} className="font-semibold text-emerald-300">
+            {match[0]}
+          </span>
+        );
+        lastIndex = match.index + match[0].length;
+        match = pattern.exec(segment);
+      }
+      if (!parts.length) return fallback();
+      if (lastIndex < segment.length) parts.push(segment.slice(lastIndex));
+      return parts;
+    };
+    const urlParts = [];
+    let lastUrlIndex = 0;
+    let urlMatch = messageUrlPattern.exec(textValue);
+    while (urlMatch) {
+      if (urlMatch.index > lastUrlIndex) {
+        urlParts.push(...renderMentionParts(textValue.slice(lastUrlIndex, urlMatch.index), `text-${lastUrlIndex}`));
+      }
+      const urlText = urlMatch[0];
+      urlParts.push(
+        <a
+          key={`url-${urlMatch.index}-${urlText}`}
+          href={normalizedHref(urlText)}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={event => event.stopPropagation()}
+          className="font-semibold text-sky-300 underline decoration-sky-300/40 underline-offset-2 hover:text-sky-200"
+        >
+          {urlText}
+        </a>
       );
-      lastIndex = match.index + match[0].length;
-      match = pattern.exec(textValue);
+      lastUrlIndex = urlMatch.index + urlText.length;
+      urlMatch = messageUrlPattern.exec(textValue);
     }
-    if (!parts.length) return fallback();
-    if (lastIndex < textValue.length) parts.push(textValue.slice(lastIndex));
-    return parts;
+    messageUrlPattern.lastIndex = 0;
+    if (urlParts.length) {
+      if (lastUrlIndex < textValue.length) urlParts.push(...renderMentionParts(textValue.slice(lastUrlIndex), `text-${lastUrlIndex}`));
+      return urlParts;
+    }
+    return renderMentionParts(textValue);
   }, [mentionLabels]);
   const visibleMessages = useMemo(() => {
     const query = messageSearch.trim().toLowerCase();
@@ -867,11 +903,11 @@ export default function StudentRooms() {
   useEffect(() => {
     const urlRoom = searchParams.get('room') || '';
     const urlFilter = searchParams.get('filter') || 'all';
-    if (urlRoom && urlRoom !== activeGroupId) setActiveGroupId(urlRoom);
+    if (urlRoom !== activeGroupId) setActiveGroupId(urlRoom);
     if (['all', 'unread', 'groups', 'archived', 'starred'].includes(urlFilter) && urlFilter !== chatFilter) {
       setChatFilter(urlFilter);
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     setSearchParams(previous => {
@@ -881,8 +917,35 @@ export default function StudentRooms() {
       if (chatFilter && chatFilter !== 'all') params.set('filter', chatFilter);
       else params.delete('filter');
       return params;
-    }, { replace: true });
+    }, { replace: !activeGroupId });
   }, [activeGroupId, chatFilter, setSearchParams]);
+
+  useEffect(() => {
+    const panelOpen = showQrScanner || showInfo || showInviteQr || showAddMembers || showCreate || showBroadcast || showStarred || showScheduledList || Boolean(fullScreenMedia);
+    if (panelOpen && !panelHistoryGuardRef.current) {
+      window.history.pushState({ studysphereRoomPanel: true }, '', window.location.href);
+      panelHistoryGuardRef.current = true;
+    }
+    if (!panelOpen) panelHistoryGuardRef.current = false;
+
+    const handlePopState = () => {
+      if (showQrScanner) setShowQrScanner(false);
+      else if (showInfo) {
+        setShowInfo(false);
+        setShowGroupSettings(false);
+        setEditingGroupName(false);
+      } else if (showInviteQr) setShowInviteQr(false);
+      else if (showAddMembers) setShowAddMembers(false);
+      else if (showCreate) setShowCreate(false);
+      else if (showBroadcast) setShowBroadcast(false);
+      else if (showStarred) setShowStarred(false);
+      else if (showScheduledList) setShowScheduledList(false);
+      else if (fullScreenMedia) setFullScreenMedia(null);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [showQrScanner, showInfo, showInviteQr, showAddMembers, showCreate, showBroadcast, showStarred, showScheduledList, fullScreenMedia]);
 
   useEffect(() => {
     const unreadCount = openingUnreadCountRef.current;
@@ -2030,7 +2093,7 @@ export default function StudentRooms() {
     }
   };
 
-  const joinInviteCode = async (value) => {
+  const joinInviteCode = useCallback(async (value) => {
     const code = inviteCodeFromValue(value);
     if (!code) return false;
     try {
@@ -2039,13 +2102,13 @@ export default function StudentRooms() {
       setActiveGroupId(res.data.group._id);
       setJoinCode('');
       setShowQrScanner(false);
-      toast.success('Joined room');
+      toast.success(res.data.alreadyMember ? 'Room opened' : 'Joined room');
       return true;
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not join room');
       return false;
     }
-  };
+  }, []);
 
   const joinByInvite = async (event) => {
     event.preventDefault();
@@ -2321,7 +2384,7 @@ export default function StudentRooms() {
                 <button type="button" onClick={() => setShowCreate(true)} className="grid h-10 w-10 place-items-center rounded-full text-slate-300 hover:bg-white/10" aria-label="Create room" title="Create room">
                   <Plus className="h-5 w-5" />
                 </button>
-                <Avatar user={user} className="h-10 w-10" />
+                <Avatar user={user} className="h-8 w-8 sm:h-10 sm:w-10" />
               </div>
             </div>
             <form onSubmit={joinByInvite} className="mt-3 flex gap-2">
@@ -2381,7 +2444,7 @@ export default function StudentRooms() {
                     <p className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-medium text-white">
                       {isArchivedChat && <Archive className="h-3 w-3 flex-shrink-0 text-slate-400" />}
                       {isLockedChat && <Lock className="h-3 w-3 flex-shrink-0 text-amber-300" />}
-                      <span className="truncate">{group.name}</span>
+                      {renderMarqueeName(group.name, 'block min-w-0 max-w-full truncate')}
                     </p>
                   </div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -2397,8 +2460,8 @@ export default function StudentRooms() {
                 </div>
                 {group.unreadCount > 0 && <span className="absolute bottom-3 right-3 grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white shadow-[0_0_0_4px_rgba(239,68,68,0.12)]">{group.unreadCount}</span>}
                 <div data-chat-popover className="absolute right-3 top-8 flex items-center opacity-0 transition-opacity group-hover/chatrow:opacity-100">
-                  <button type="button" onClick={(event) => { event.stopPropagation(); setChatActionMenuGroupId(chatActionMenuGroupId === group._id ? '' : group._id); }} className="grid h-7 w-7 place-items-center rounded-full bg-slate-950/80 text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Chat actions">
-                    <MoreVertical className="h-3.5 w-3.5" />
+                  <button type="button" onClick={(event) => { event.stopPropagation(); setChatActionMenuGroupId(chatActionMenuGroupId === group._id ? '' : group._id); }} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950/80 text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Chat actions">
+                    <MoreVertical className="h-[18px] w-[18px]" />
                   </button>
                 </div>
                 {chatActionMenuGroupId === group._id && (
@@ -2437,7 +2500,7 @@ export default function StudentRooms() {
                       </button>
                       <GroupAvatar group={activeGroup} className="h-8 w-8 sm:h-10 sm:w-10" />
                       <div className="min-w-0">
-                        <h2 className="truncate text-sm font-semibold text-white sm:text-base">{infoDraft.name || activeGroup.name}</h2>
+                        <h2 className="min-w-0 text-sm font-semibold text-white sm:text-base">{renderMarqueeName(infoDraft.name || activeGroup.name, 'block min-w-0 max-w-full truncate')}</h2>
                         <p className="truncate text-[10px] text-slate-500 sm:text-xs">{activeGroup.members?.length || 0} members - {activeOnlineMembers.length} online</p>
                       </div>
                     </div>
@@ -2465,7 +2528,7 @@ export default function StudentRooms() {
                               {editingGroupName ? (
                                 <input className="input-field h-9 flex-1 text-sm sm:h-10" autoFocus value={infoDraft.name} disabled={!canManageGroup} onChange={e => setInfoDraft(current => ({ ...current, name: e.target.value }))} />
                               ) : (
-                                <p className="truncate text-base font-semibold text-white sm:text-xl">{infoDraft.name || activeGroup.name}</p>
+                                <p className="min-w-0 text-base font-semibold text-white sm:text-xl">{renderMarqueeName(infoDraft.name || activeGroup.name, 'block min-w-0 max-w-full truncate')}</p>
                               )}
                               {canManageGroup && <button type="button" onClick={() => setEditingGroupName(value => !value)} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Edit group name"><Edit3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" /></button>}
                             </div>
@@ -2734,7 +2797,7 @@ export default function StudentRooms() {
                   <button type="button" onClick={() => { setShowInfo(true); loadGalleryInline('images'); }} className="flex min-w-0 items-center gap-3 rounded-xl px-1 py-1 text-left hover:bg-white/5" aria-label="Room info">
                   <GroupAvatar group={activeGroup} className="h-10 w-10" />
                   <div className="min-w-0">
-                    <h2 className="truncate text-[15px] font-semibold text-white">{activeGroup.name}</h2>
+                    <h2 className="min-w-0 text-[15px] font-semibold text-white">{renderMarqueeName(activeGroup.name, 'block min-w-0 max-w-full truncate')}</h2>
                     <p className="truncate text-xs text-slate-500">
                       {activeGroup.members?.length || 0} members - {activeOnlineMembers.length} online
                       {otherPrivateMember && !onlineUserIds.map(String).includes(String(otherPrivateMember._id)) && lastSeenByUserId[String(otherPrivateMember._id)] ? ` - last seen ${formatDateTime(lastSeenByUserId[String(otherPrivateMember._id)])}` : ''}
@@ -2756,7 +2819,7 @@ export default function StudentRooms() {
                     <option value="starred">Starred</option>
                   </select>}
                   <div data-chat-popover className="relative">
-                    <button type="button" onClick={() => setGroupMenuOpen(value => !value)} className="rounded-full p-2 text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Chat options"><MoreVertical className="h-5 w-5" /></button>
+                    <button type="button" onClick={() => setGroupMenuOpen(value => !value)} className="grid h-10 w-10 place-items-center rounded-full text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Chat options"><MoreVertical className="h-5 w-5" /></button>
                     {groupMenuOpen && (
                       <div className="absolute right-0 top-11 z-30 w-52 rounded-2xl border border-white/10 bg-slate-950 p-2 shadow-2xl">
                         <button type="button" onClick={() => { setShowInfo(true); loadGalleryInline('images'); setGroupMenuOpen(false); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-100 hover:bg-white/10">
@@ -2810,7 +2873,7 @@ export default function StudentRooms() {
                     <button type="button" disabled={!selectedMessages.length} onClick={starSelected} className="rounded-xl p-2 text-slate-200 hover:bg-white/10 disabled:opacity-40" aria-label="Star"><Star className="h-5 w-5" /></button>
                     <button type="button" disabled={!selectedMessages.length} onClick={() => openDeleteConfirm(selectedMessageRows)} className="rounded-xl p-2 text-red-200 hover:bg-red-500/10 disabled:opacity-40" aria-label="Delete"><Trash2 className="h-5 w-5" /></button>
                     {singleSelectedMessage && <button type="button" onClick={() => setForwardMessage(singleSelectedMessage)} className="rounded-xl p-2 text-slate-200 hover:bg-white/10" aria-label="Forward"><Forward className="h-5 w-5" /></button>}
-                    {singleSelectedMessage && <button type="button" onClick={() => { setMobileMoreOpen(value => !value); setActionMessage(singleSelectedMessage); }} className="rounded-xl p-2 text-slate-200 hover:bg-white/10" aria-label="More"><MoreVertical className="h-5 w-5" /></button>}
+                    {singleSelectedMessage && <button type="button" onClick={() => { setMobileMoreOpen(value => !value); setActionMessage(singleSelectedMessage); }} className="grid h-10 w-10 place-items-center rounded-xl text-slate-200 hover:bg-white/10" aria-label="More"><MoreVertical className="h-5 w-5" /></button>}
                   </div>
                   {mobileMoreOpen && singleSelectedMessage && (
                     <div data-chat-popover className="absolute right-3 top-12 z-20 w-48 rounded-xl border border-white/10 bg-slate-950 p-1 shadow-2xl">
@@ -3361,7 +3424,7 @@ export default function StudentRooms() {
       <QrScannerModal
         open={showQrScanner}
         onClose={() => setShowQrScanner(false)}
-        onDetected={(value) => joinInviteCode(value)}
+        onDetected={joinInviteCode}
       />
 
       <FeaturePanel open={showAddMembers && Boolean(activeGroup)} title="Add Members" onClose={() => setShowAddMembers(false)}>
