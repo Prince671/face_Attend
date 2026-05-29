@@ -183,7 +183,7 @@ export default function LoginPage() {
                 type="text"
                 autoComplete="username"
                 className="input-field"
-                placeholder="you@school.edu or 0302CS243D08"
+                placeholder="abc@gmail.com or 0302xxxx08"
                 value={form.email}
                 onChange={e => setForm({ ...form, email: e.target.value })}
                 required

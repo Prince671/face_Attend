@@ -184,8 +184,8 @@ WEBAUTHN_ORIGIN=http://localhost:5173
 WEBAUTHN_RP_ID=
 
 # Optional ML keep-alive ping from the Node backend
-ML_KEEPALIVE_ENABLED=false
-ML_KEEPALIVE_URL=https://face-attend-ml-backend.onrender.com
+ML_KEEPALIVE_ENABLED=true
+ML_KEEPALIVE_URL=https://face-attend-ml-backend.onrender.com/health
 ML_KEEPALIVE_INTERVAL_MS=60000
 ML_KEEPALIVE_TIMEOUT_MS=10000
 
@@ -477,5 +477,5 @@ Then confirm:
 - Configure Redis only through secure environment variables.
 - Configure reverse proxy routes for `/api` and Socket.IO.
 - Keep the ML service close to the backend for lower latency.
-- Add a `/health` monitor for the ML service and use an uptime monitor or paid always-on hosting to avoid cold starts.
+- Add a `/health` monitor for the ML service and use an uptime monitor or paid always-on hosting to avoid cold starts. The backend can also ping `ML_KEEPALIVE_URL` every `60000ms` when `ML_KEEPALIVE_ENABLED=true`.
 - Monitor scheduled notification jobs for assignment/quiz deadlines and reminders.

@@ -4,7 +4,9 @@ const normalizeHealthUrl = (baseUrl) => {
   if (!baseUrl) return null;
   const trimmed = String(baseUrl).trim().replace(/\/+$/, '');
   if (!trimmed) return null;
-  return /\/health$/i.test(trimmed) ? trimmed : `${trimmed}/health`;
+  if (/\/health$/i.test(trimmed)) return trimmed;
+  if (/\/heath$/i.test(trimmed)) return `${trimmed.slice(0, -6)}/health`;
+  return `${trimmed}/health`;
 };
 
 const startMlKeepAlive = () => {
@@ -15,7 +17,7 @@ const startMlKeepAlive = () => {
     return null;
   }
 
-  const intervalMs = Math.max(Number(process.env.ML_KEEPALIVE_INTERVAL_MS || 60000), 30000);
+  const intervalMs = Math.max(Number(process.env.ML_KEEPALIVE_INTERVAL_MS || 60000), 60000);
   const timeoutMs = Math.max(Number(process.env.ML_KEEPALIVE_TIMEOUT_MS || 10000), 3000);
   let running = false;
 
@@ -43,8 +45,10 @@ const startMlKeepAlive = () => {
     }
   };
 
-  setTimeout(ping, 5000);
+  const firstPing = setTimeout(ping, 5000);
+  firstPing.unref?.();
   const interval = setInterval(ping, intervalMs);
+  interval.unref?.();
   console.log(`ML keep-alive enabled: ${healthUrl} every ${Math.round(intervalMs / 1000)}s`);
   return interval;
 };
