@@ -208,6 +208,10 @@ CLOUDINARY_FOLDER=studysphere
 REDIS_URL=redis://127.0.0.1:6379
 CACHE_ENABLED=true
 CACHE_DEFAULT_TTL_SECONDS=60
+REDIS_MAX_WAIT_MS=30000
+REDIS_CONNECT_TIMEOUT_MS=1500
+REDIS_COMMAND_TIMEOUT_MS=1200
+REDIS_RETRY_COOLDOWN_MS=60000
 
 # Seed defaults
 ADMIN_EMAIL=admin@school.edu
@@ -236,6 +240,8 @@ CACHE_ENABLED=true
 ```
 
 If your local network blocks the hosted Redis TCP connection, keep `CACHE_ENABLED=false` locally and enable Redis only in deployment.
+
+In production, Redis is treated as an optional speed layer. MongoDB remains the source of truth. If Redis is unavailable or slow, the backend falls back to MongoDB instead of failing the request. `REDIS_MAX_WAIT_MS` caps Redis waits at 30 seconds even if a larger timeout is accidentally configured; keep the connect/command values low for better user-facing performance. Check `/api/ready`; it reports `cache: "connected"`, `cache: "fallback"`, or `cache: "disabled"`.
 
 ### Biometric Deployment Notes
 

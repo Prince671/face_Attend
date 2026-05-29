@@ -648,13 +648,18 @@ const login = async (req, res) => {
     }
 
     const normalizedEmail = identifier.toLowerCase();
+    const studentIdCandidates = [...new Set([
+      identifier,
+      identifier.toUpperCase(),
+      identifier.toLowerCase()
+    ])];
     const loginQuery = identifier.includes('@')
       ? { email: normalizedEmail, pendingDeletion: { $ne: true } }
       : {
         pendingDeletion: { $ne: true },
         $or: [
           { email: normalizedEmail },
-          { role: 'student', studentId: { $regex: `^${escapeRegex(identifier)}$`, $options: 'i' } }
+          { role: 'student', studentId: { $in: studentIdCandidates } }
         ]
       };
 
@@ -673,8 +678,11 @@ const login = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Your account has been deactivated. Contact admin.' });
     }
 
-    user.lastLogin = new Date();
-    await user.save({ validateBeforeSave: false });
+    const lastLogin = new Date();
+    user.lastLogin = lastLogin;
+    User.updateOne({ _id: user._id }, { $set: { lastLogin } }).catch((error) => {
+      console.warn('lastLogin update failed:', error.message);
+    });
 
     const token = generateToken(user._id);
 
@@ -983,7 +991,8 @@ const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
       .populate('enrolledSubjects', 'name code branch semester')
-      .select('-password -faceEncoding -biometricChallenge');
+      .select('-password -faceEncoding -biometricChallenge')
+      .lean();
     res.json({ success: true, user: safeUserPayload(user) });
   } catch (err) {
     console.error('getMe error:', err);

@@ -2,20 +2,90 @@ const { createClient } = require('redis');
 
 let redisClient = null;
 let redisConnectionPromise = null;
+let redisDisabledUntil = 0;
+let lastRedisWarning = '';
 
-const isCacheEnabled = () => String(process.env.CACHE_ENABLED || 'true').toLowerCase() !== 'false';
+const readMs = (value, fallback, max = Number.POSITIVE_INFINITY) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+};
+
+const MAX_REDIS_WAIT_MS = readMs(process.env.REDIS_MAX_WAIT_MS, 30 * 1000, 30 * 1000);
+const CONNECT_TIMEOUT_MS = readMs(process.env.REDIS_CONNECT_TIMEOUT_MS, 1500, MAX_REDIS_WAIT_MS);
+const COMMAND_TIMEOUT_MS = readMs(process.env.REDIS_COMMAND_TIMEOUT_MS, 1200, MAX_REDIS_WAIT_MS);
+const RETRY_COOLDOWN_MS = readMs(process.env.REDIS_RETRY_COOLDOWN_MS, 60 * 1000);
+
+const isCacheEnabled = () => {
+  if (String(process.env.CACHE_ENABLED || 'true').toLowerCase() === 'false') return false;
+  return Boolean(process.env.REDIS_URL);
+};
+
+const warnOnce = (message) => {
+  if (lastRedisWarning === message) return;
+  lastRedisWarning = message;
+  console.warn(message);
+};
+
+const normalizeRedisUrl = () => {
+  const rawUrl = (process.env.REDIS_URL || '').trim();
+  if (!rawUrl) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    warnOnce('Redis disabled: REDIS_URL is not a valid URL. Use rediss://... for Upstash TLS Redis.');
+    return null;
+  }
+
+  if (['http:', 'https:'].includes(parsed.protocol)) {
+    warnOnce('Redis disabled: REDIS_URL must be a Redis connection URL, not the Upstash REST URL.');
+    return null;
+  }
+
+  if (!['redis:', 'rediss:'].includes(parsed.protocol)) {
+    warnOnce(`Redis disabled: unsupported REDIS_URL protocol "${parsed.protocol}".`);
+    return null;
+  }
+
+  if (parsed.hostname.endsWith('.upstash.io') && parsed.protocol === 'redis:') {
+    parsed.protocol = 'rediss:';
+  }
+
+  return parsed.toString();
+};
+
+const withTimeout = (promise, timeoutMs, label) => {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${timeoutMs}ms`)), timeoutMs);
+    timeoutId.unref?.();
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+};
 
 const getRedisClient = () => {
   if (!redisClient) {
+    const url = normalizeRedisUrl();
+    if (!url) return null;
+
     redisClient = createClient({
-      url: process.env.REDIS_URL || 'redis://localhost:6379',
+      url,
+      disableOfflineQueue: true,
       socket: {
-        reconnectStrategy: (retries) => Math.min(retries * 50, 1000),
+        connectTimeout: CONNECT_TIMEOUT_MS,
+        reconnectStrategy: (retries) => Math.min(retries * 100, 1000),
       },
     });
 
     redisClient.on('error', (error) => {
-      console.warn('Redis error:', error.message);
+      warnOnce(`Redis error: ${error.message}`);
+    });
+
+    redisClient.on('end', () => {
+      redisConnectionPromise = null;
     });
   }
 
@@ -24,19 +94,26 @@ const getRedisClient = () => {
 
 const connectRedis = async () => {
   if (!isCacheEnabled()) return null;
+  if (Date.now() < redisDisabledUntil) return null;
 
   const client = getRedisClient();
-  if (client.isOpen) return client;
+  if (!client) return null;
+  if (client.isOpen && client.isReady) return client;
 
   if (!redisConnectionPromise) {
-    redisConnectionPromise = client.connect()
+    redisConnectionPromise = withTimeout(client.connect(), CONNECT_TIMEOUT_MS, 'Redis connection')
       .then(() => {
         console.log('Redis connected');
         return client;
       })
       .catch((error) => {
         redisConnectionPromise = null;
-        console.warn('Redis connection failed:', error.message);
+        redisDisabledUntil = Date.now() + RETRY_COOLDOWN_MS;
+        try {
+          if (!client.isOpen) client.destroy?.();
+        } catch (_) {}
+        if (!client.isOpen) redisClient = null;
+        warnOnce(`Redis cache unavailable: ${error.message}. Retrying in ${Math.round(RETRY_COOLDOWN_MS / 1000)}s.`);
         return null;
       });
   }
@@ -50,9 +127,19 @@ const closeRedis = async () => {
   }
 };
 
+const getRedisStatus = () => ({
+  enabled: isCacheEnabled(),
+  connected: Boolean(redisClient?.isReady),
+  coolingDown: Date.now() < redisDisabledUntil,
+  retryAfterMs: Math.max(0, redisDisabledUntil - Date.now()),
+});
+
 module.exports = {
+  COMMAND_TIMEOUT_MS,
   connectRedis,
   closeRedis,
   getRedisClient,
+  getRedisStatus,
   isCacheEnabled,
+  withTimeout,
 };

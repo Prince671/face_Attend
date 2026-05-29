@@ -397,7 +397,6 @@ const FeaturePanel = ({ open, title, children, onClose, action, wide = false }) 
 const QrScannerModal = ({ open, onClose, onDetected }) => {
   const videoRef = useRef(null);
   const scannerControlsRef = useRef(null);
-  const streamRef = useRef(null);
   const frameRef = useRef(0);
   const detectedRef = useRef(false);
   const [error, setError] = useState('');
@@ -414,8 +413,10 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
       window.cancelAnimationFrame(frameRef.current);
       scannerControlsRef.current?.stop();
       scannerControlsRef.current = null;
-      streamRef.current?.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+      if (videoRef.current?.srcObject) {
+        videoRef.current.srcObject.getTracks?.().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
     };
 
     const handleDetected = async (value) => {
@@ -446,37 +447,42 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
       }
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        });
-        if (stopped) {
-          stream.getTracks().forEach(track => track.stop());
-          return;
-        }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        if (stopped) return;
-        setScanPhase('scanning');
-        setScannerStatus('');
-
         const { BrowserQRCodeReader } = await import('@zxing/browser');
         if (stopped) return;
         const reader = new BrowserQRCodeReader(undefined, {
-          delayBetweenScanAttempts: 80,
+          delayBetweenScanAttempts: 120,
           tryPlayVideoTimeout: 1800,
         });
-        const result = await reader.decodeOnceFromStream(stream, videoRef.current);
-        if (stopped || detectedRef.current || !result) return;
-        const value = result.getText?.() || result.text || '';
-        if (value.trim()) await handleDetected(value);
+        const controls = await reader.decodeFromConstraints(
+          {
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          },
+          videoRef.current,
+          async (result, scanError, controlsRef) => {
+            if (stopped || detectedRef.current) return;
+            if (result) {
+              const value = result.getText?.() || result.text || '';
+              if (value.trim()) {
+                controlsRef?.stop?.();
+                await handleDetected(value);
+              }
+            } else if (scanError && !/NotFoundException/i.test(scanError?.name || scanError?.message || '')) {
+              console.debug?.('QR scanner retry:', scanError?.message || scanError);
+            }
+          }
+        );
+        if (stopped) {
+          controls.stop();
+          return;
+        }
+        scannerControlsRef.current = controls;
+        setScanPhase('scanning');
+        setScannerStatus('');
       } catch (err) {
         const message = err?.name === 'NotAllowedError'
           ? 'Camera permission is required to scan a room QR.'

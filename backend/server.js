@@ -10,7 +10,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const connectDB = require('./config/db');
-const { connectRedis, closeRedis } = require('./config/redis');
+const { connectRedis, closeRedis, getRedisStatus } = require('./config/redis');
 const { closeExpiredAttendance } = require('./utils/attendanceAutoClose');
 const { cleanupExpiredAttendanceCaptures } = require('./utils/attendanceCaptureCleanup');
 const { sendUpcomingLectureReminders } = require('./utils/lectureReminderScheduler');
@@ -138,9 +138,12 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/ready', (req, res) => {
   const dbReady = mongoose.connection.readyState === 1;
+  const redis = getRedisStatus();
   res.status(dbReady ? 200 : 503).json({
     success: dbReady,
     database: dbReady ? 'connected' : 'unavailable',
+    cache: redis.connected ? 'connected' : (redis.enabled ? 'fallback' : 'disabled'),
+    cacheRetryAfterMs: redis.retryAfterMs,
     timestamp: new Date()
   });
 });

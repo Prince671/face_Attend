@@ -4,7 +4,13 @@ const { requestCacheKey } = require('../utils/cacheKeys');
 const cacheMiddleware = (domain, ttlSeconds, keyBuilder) => async (req, res, next) => {
   if (req.method !== 'GET') return next();
   const key = keyBuilder ? keyBuilder(req) : requestCacheKey(domain, req);
-  const cached = await getCache(key);
+  let cached = null;
+  try {
+    cached = await getCache(key);
+  } catch (error) {
+    console.warn('Cache middleware bypassed:', error.message);
+  }
+
   if (cached) {
     res.setHeader('X-StudySphere-Cache', 'HIT');
     return res.status(cached.statusCode || 200).json(cached.body);
