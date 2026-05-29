@@ -1,9 +1,11 @@
 import React, { Suspense, lazy, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import RealtimeBridge from './features/realtime/realtimeBridge';
+import { apiSlice } from './services/apiSlice';
 import { setAppNavigate } from './utils/navigation';
 import { AppShellSkeleton, AuthPageSkeleton, PageLoader } from './components/LoadingStates';
 
@@ -125,6 +127,66 @@ const NavigationBridge = () => {
   return null;
 };
 
+const DATA_REFRESH_TAGS = [
+  'Dashboard',
+  'StudentDashboard',
+  'AdminDashboard',
+  'Subjects',
+  'Timetable',
+  'Lectures',
+  'Analytics',
+  'Attendance',
+  'Lms',
+  'Classroom',
+  'Notifications',
+  'ChatGroups',
+  'ChatMessages',
+  'ChatGallery',
+  'Profile'
+];
+
+const DataRefreshBridge = () => {
+  const dispatch = useDispatch();
+  const location = useLocation();
+
+  useEffect(() => {
+    let lastRefreshAt = 0;
+    const requestRefresh = () => {
+      const now = Date.now();
+      if (now - lastRefreshAt < 1500) return;
+      lastRefreshAt = now;
+      window.dispatchEvent(new CustomEvent('studysphere:data-refresh'));
+      dispatch(apiSlice.util.invalidateTags(DATA_REFRESH_TAGS));
+    };
+
+    const handlePageShow = (event) => {
+      if (event.persisted) requestRefresh();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') requestRefresh();
+    };
+
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('online', requestRefresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('online', requestRefresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [dispatch]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('studysphere:data-refresh'));
+      dispatch(apiSlice.util.invalidateTags(DATA_REFRESH_TAGS));
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [dispatch, location.key, location.pathname, location.search]);
+
+  return null;
+};
+
 export default function App() {
   useEffect(() => {
     const preventPageCopy = (event) => {
@@ -143,6 +205,7 @@ export default function App() {
         <RealtimeBridge />
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <NavigationBridge />
+          <DataRefreshBridge />
           <Toaster
             position="top-right"
             toastOptions={{

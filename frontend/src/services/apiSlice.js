@@ -18,6 +18,10 @@ const axiosBaseQuery = () => async ({ url, method = 'GET', data, params, headers
 export const apiSlice = createApi({
   reducerPath: 'api',
   baseQuery: axiosBaseQuery(),
+  keepUnusedDataFor: 15,
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
+  refetchOnMountOrArgChange: true,
   tagTypes: [
     'Dashboard',
     'StudentDashboard',

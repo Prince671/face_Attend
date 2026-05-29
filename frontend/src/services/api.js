@@ -4,7 +4,18 @@ import { navigateTo } from '../utils/navigation';
 const API = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
   withCredentials: true,
+  timeout: Number(import.meta.env.VITE_API_TIMEOUT_MS || 30000),
 });
+
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
+const isRetryableRequest = (error) => {
+  const method = String(error.config?.method || 'get').toLowerCase();
+  if (method !== 'get') return false;
+  if (error.code === 'ECONNABORTED' || error.message?.toLowerCase?.().includes('timeout')) return true;
+  if (!error.response) return true;
+  return RETRYABLE_STATUSES.has(error.response.status);
+};
 
 // Attach token to every request
 API.interceptors.request.use((config) => {
@@ -16,11 +27,20 @@ API.interceptors.request.use((config) => {
 // Handle 401/403 globally
 API.interceptors.response.use(
   (res) => res,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       navigateTo('/login', { replace: true });
+    }
+    if (isRetryableRequest(error)) {
+      const config = error.config || {};
+      config.__retryCount = Number(config.__retryCount || 0);
+      if (config.__retryCount < 2) {
+        config.__retryCount += 1;
+        await sleep(300 * config.__retryCount);
+        return API(config);
+      }
     }
     return Promise.reject(error);
   }

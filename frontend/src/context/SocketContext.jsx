@@ -192,4 +192,10 @@ export const useRealtimeRefresh = (refresh, targets = [], deps = []) => {
     const timer = window.setTimeout(() => refreshRef.current?.(realtimeEvent), 120);
     return () => window.clearTimeout(timer);
   }, [realtimeVersion, realtimeEvent, matches, ...deps]);
+
+  useEffect(() => {
+    const handleRefresh = () => refreshRef.current?.({ name: 'data-refresh', domains: targetsRef.current || [] });
+    window.addEventListener('studysphere:data-refresh', handleRefresh);
+    return () => window.removeEventListener('studysphere:data-refresh', handleRefresh);
+  }, [...deps]);
 };
