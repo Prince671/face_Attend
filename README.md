@@ -176,6 +176,13 @@ JWT_EXPIRE=7d
 FRONTEND_URL=http://localhost:5173
 ML_SERVICE_URL=http://localhost:8000
 
+# Biometric/passkey login
+# In production, set FRONTEND_URL/WEBAUTHN_ORIGIN to the exact deployed frontend origin.
+# Example: https://your-app.vercel.app
+WEBAUTHN_ORIGIN=http://localhost:5173
+# Optional. Usually leave empty so the backend derives it from the trusted frontend domain.
+WEBAUTHN_RP_ID=
+
 # Optional ML keep-alive ping from the Node backend
 ML_KEEPALIVE_ENABLED=false
 ML_KEEPALIVE_URL=https://face-attend-ml-backend.onrender.com
@@ -229,6 +236,20 @@ CACHE_ENABLED=true
 ```
 
 If your local network blocks the hosted Redis TCP connection, keep `CACHE_ENABLED=false` locally and enable Redis only in deployment.
+
+### Biometric Deployment Notes
+
+WebAuthn/passkey registration only works on `localhost` or HTTPS domains. On deployment, the relying party ID must match the frontend domain, not the Render/backend API domain.
+
+For Vercel + Render, set these backend environment variables on Render:
+
+```env
+FRONTEND_URL=https://your-frontend.vercel.app
+WEBAUTHN_ORIGIN=https://your-frontend.vercel.app
+WEBAUTHN_RP_ID=
+```
+
+Leave `WEBAUTHN_RP_ID` empty unless you are intentionally sharing passkeys across subdomains. If you set it, it must be equal to the frontend hostname or a valid parent domain of it.
 
 ### Frontend `.env`
 

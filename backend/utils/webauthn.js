@@ -1,7 +1,79 @@
 const crypto = require('crypto');
 
-const expectedRpId = () => process.env.WEBAUTHN_RP_ID || 'localhost';
-const expectedOrigin = () => process.env.WEBAUTHN_ORIGIN || 'http://localhost:5173';
+const LOCAL_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
+const configuredOrigins = () => [
+  process.env.WEBAUTHN_ORIGIN,
+  process.env.FRONTEND_URL,
+  ...LOCAL_ORIGINS
+]
+  .filter(Boolean)
+  .flatMap(value => String(value).split(','))
+  .map(value => value.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const normalizeOrigin = (origin) => {
+  if (!origin) return '';
+  try {
+    const parsed = new URL(origin);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return '';
+  }
+};
+
+const isPrivateLanHostname = (hostname) => /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(hostname);
+
+const isAllowedOrigin = (origin) => {
+  const normalized = normalizeOrigin(origin);
+  if (!normalized) return false;
+  if (configuredOrigins().includes(normalized)) return true;
+
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const { hostname, protocol } = new URL(normalized);
+      return ['http:', 'https:'].includes(protocol) && isPrivateLanHostname(hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+};
+
+const requestOrigin = (req) => {
+  const headerOrigin = normalizeOrigin(req?.get?.('origin'));
+  if (headerOrigin) return headerOrigin;
+
+  const refererOrigin = normalizeOrigin(req?.get?.('referer'));
+  if (refererOrigin) return refererOrigin;
+
+  return normalizeOrigin(process.env.WEBAUTHN_ORIGIN || process.env.FRONTEND_URL || LOCAL_ORIGINS[0]);
+};
+
+const assertTrustedOrigin = (origin) => {
+  const normalized = normalizeOrigin(origin);
+  if (!isAllowedOrigin(normalized)) {
+    throw new Error('This app domain is not allowed for biometric login. Set FRONTEND_URL or WEBAUTHN_ORIGIN to your deployed frontend URL.');
+  }
+  return normalized;
+};
+
+const rpIdFromOrigin = (origin) => new URL(assertTrustedOrigin(origin)).hostname;
+
+const rpIdMatchesOrigin = (rpId, origin) => {
+  const hostname = new URL(assertTrustedOrigin(origin)).hostname;
+  return hostname === rpId || hostname.endsWith(`.${rpId}`);
+};
+
+const expectedOrigin = (req) => assertTrustedOrigin(requestOrigin(req));
+
+const expectedRpId = (req) => {
+  const origin = expectedOrigin(req);
+  const configuredRpId = String(process.env.WEBAUTHN_RP_ID || '').trim();
+  if (configuredRpId && rpIdMatchesOrigin(configuredRpId, origin)) return configuredRpId;
+  return rpIdFromOrigin(origin);
+};
 
 const base64url = (input) => Buffer.from(input)
   .toString('base64')
@@ -108,23 +180,24 @@ const parseAttestationObject = (attestationObject) => {
 
 const parseClientData = (clientDataJSON) => JSON.parse(Buffer.from(clientDataJSON).toString('utf8'));
 
-const verifyClientData = ({ clientDataJSON, challenge, type }) => {
+const verifyClientData = ({ clientDataJSON, challenge, type, req }) => {
   const clientData = parseClientData(clientDataJSON);
   if (clientData.type !== type) throw new Error('Invalid biometric response type');
   if (clientData.challenge !== challenge) throw new Error('Invalid biometric challenge');
-  if (clientData.origin !== expectedOrigin()) throw new Error('Invalid biometric origin');
+  if (!isAllowedOrigin(clientData.origin)) throw new Error('Invalid biometric origin');
+  if (req && normalizeOrigin(clientData.origin) !== expectedOrigin(req)) throw new Error('Invalid biometric origin');
   return clientData;
 };
 
-const verifyAssertion = ({ credential, storedCredential, challenge }) => {
+const verifyAssertion = ({ credential, storedCredential, challenge, req }) => {
   const response = credential.response || {};
   const authenticatorData = fromBase64url(response.authenticatorData);
   const clientDataJSON = fromBase64url(response.clientDataJSON);
   const signature = fromBase64url(response.signature);
-  verifyClientData({ clientDataJSON, challenge, type: 'webauthn.get' });
+  const clientData = verifyClientData({ clientDataJSON, challenge, type: 'webauthn.get', req });
 
   const rpIdHash = authenticatorData.subarray(0, 32);
-  const expectedHash = crypto.createHash('sha256').update(expectedRpId()).digest();
+  const expectedHash = crypto.createHash('sha256').update(expectedRpId(req || { get: () => clientData.origin })).digest();
   if (!crypto.timingSafeEqual(rpIdHash, expectedHash)) throw new Error('Invalid biometric relying party');
 
   const flags = authenticatorData[32];
@@ -146,6 +219,7 @@ module.exports = {
   randomChallenge,
   expectedRpId,
   expectedOrigin,
+  isAllowedOrigin,
   parseAttestationObject,
   verifyClientData,
   verifyAssertion

@@ -810,7 +810,7 @@ const beginBiometricRegistration = async (req, res) => {
       success: true,
       options: {
         challenge,
-        rp: { name: 'StudySphere', id: expectedRpId() },
+        rp: { name: 'StudySphere', id: expectedRpId(req) },
         user: {
           id: base64url(user._id.toString()),
           name: user.email,
@@ -853,7 +853,7 @@ const finishBiometricRegistration = async (req, res) => {
     }
 
     const clientDataJSON = fromBase64url(credential.response.clientDataJSON);
-    verifyClientData({ clientDataJSON, challenge: user.biometricChallenge, type: 'webauthn.create' });
+    verifyClientData({ clientDataJSON, challenge: user.biometricChallenge, type: 'webauthn.create', req });
     const parsed = parseAttestationObject(fromBase64url(credential.response.attestationObject));
     if (!parsed.userVerified) {
       return res.status(400).json({ success: false, message: 'Use fingerprint, face unlock, or screen lock to register biometric login.' });
@@ -909,7 +909,7 @@ const beginBiometricLogin = async (req, res) => {
       options: {
         challenge,
         timeout: 60000,
-        rpId: expectedRpId(),
+        rpId: expectedRpId(req),
         userVerification: 'required',
         allowCredentials: [{
           type: 'public-key',
@@ -953,7 +953,8 @@ const finishBiometricLogin = async (req, res) => {
     const assertion = verifyAssertion({
       credential,
       storedCredential: user.biometricCredential,
-      challenge: user.biometricChallenge
+      challenge: user.biometricChallenge,
+      req
     });
 
     if (assertion.counter > 0 && assertion.counter <= (user.biometricCredential.counter || 0)) {
