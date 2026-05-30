@@ -20,6 +20,12 @@ const {
   updateProfile,
   updateAdminScope
 } = require('../controllers/authController');
+const {
+  getPreferences,
+  getPreference,
+  setPreference,
+  deletePreference
+} = require('../controllers/preferenceController');
 const { protect, adminOnly, adminOrTeacher } = require('../middleware/authMiddleware');
 const { uploadProfile, uploadCapture } = require('../middleware/uploadMiddleware');
 const { cacheMiddleware } = require('../middleware/cacheMiddleware');
@@ -44,6 +50,10 @@ router.post('/biometric/register/verify', protect, finishBiometricRegistration);
 router.post('/biometric/login/options', beginBiometricLogin);
 router.post('/biometric/login/verify', finishBiometricLogin);
 router.get('/me', protect, cacheMiddleware('profile', 60), getMe);
+router.get('/preferences', protect, getPreferences);
+router.get('/preferences/:key', protect, getPreference);
+router.put('/preferences/:key', protect, setPreference);
+router.delete('/preferences/:key', protect, deletePreference);
 router.put('/update-profile', protect, uploadProfile.single('profileImage'), invalidateAfter(updateProfile, ['profile', 'dashboard', 'student-dashboard', 'admin-dashboard', 'chat-groups']));
 router.put('/admin-scope', protect, adminOrTeacher, invalidateAfter(updateAdminScope, ['profile', 'dashboard', 'admin-dashboard', 'subjects', 'analytics']));
 

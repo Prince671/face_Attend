@@ -8,7 +8,7 @@ import { useSocket } from '../../context/SocketContext';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
 import { PageSkeleton } from '../../components/LoadingStates';
 import { getAcademicLabel, getSemesterLabel } from '../../utils/academicLabels';
-import { lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
+import { hydrateLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
 
 export default function StudentSubjects() {
   const { user } = useAuth();
@@ -20,6 +20,7 @@ export default function StudentSubjects() {
 
   useEffect(() => {
     setActivity(readLmsActivity(user?._id));
+    hydrateLmsActivity(user?._id).then(setActivity);
   }, [user?._id]);
 
   useEffect(() => {

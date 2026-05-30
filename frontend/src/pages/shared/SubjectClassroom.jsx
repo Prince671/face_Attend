@@ -8,12 +8,12 @@ import {
   ClipboardList, Clock, Download, Edit3, ExternalLink, FileText, Eye, Filter, FolderOpen, HelpCircle, Image as ImageIcon,
   Megaphone, MessageSquare, Pin, Plus, RefreshCw, RotateCcw, Search, Send, ShieldCheck, Tag, Trash2, Trophy, Upload, Video, X, XCircle
 } from 'lucide-react';
-import { attendanceAPI, lmsAPI } from '../../services/api';
+import { attendanceAPI, lmsAPI, preferenceAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { LoadingOverlay, PageSkeleton, CardSkeleton, SkeletonLine } from '../../components/LoadingStates';
 import AppConfirmModal from '../../components/AppConfirmModal';
-import { clearLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
+import { clearLmsActivity, hydrateLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
 
 const emptyMaterial = { title: '', description: '', linkUrl: '', linkUrls: '', tags: '', folder: '', topic: '', category: 'notes', isPinned: false, files: [] };
 const emptyAssignment = {
@@ -312,6 +312,7 @@ export default function SubjectClassroom() {
   const materialFolderInputRef = useRef(null);
   const materialFolderHoldRef = useRef(null);
   const attendanceImportInputRef = useRef(null);
+  const classroomPreferenceRef = useRef({});
   const [previewResource, setPreviewResource] = useState(null);
   const [data, setData] = useState(null);
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -406,12 +407,35 @@ export default function SubjectClassroom() {
   }, [subjectId, isStaff]);
 
   useEffect(() => {
+    if (!user?._id || searchParams.get('section') || searchParams.get('tab')) return undefined;
+    let ignore = false;
+    preferenceAPI.get('classroom.lastSection')
+      .then(res => {
+        if (ignore) return;
+        const saved = res.data?.value;
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+        classroomPreferenceRef.current = saved;
+        const nextSection = saved[String(subjectId)];
+        if (tabIds.includes(nextSection) && nextSection !== activeTab) setActiveTab(nextSection);
+      })
+      .catch(() => {});
+    return () => { ignore = true; };
+  }, [user?._id, subjectId, isStaff]);
+
+  useEffect(() => {
     const nextSection = tabIds.includes(activeTab) ? activeTab : 'overview';
     if (nextSection !== activeTab) {
       setActiveTab(nextSection);
       return;
     }
     if (typeof window !== 'undefined') localStorage.setItem(sectionStorageKey, nextSection);
+    if (user?._id) {
+      classroomPreferenceRef.current = {
+        ...classroomPreferenceRef.current,
+        [String(subjectId)]: nextSection,
+      };
+      preferenceAPI.set('classroom.lastSection', classroomPreferenceRef.current).catch(() => {});
+    }
     setSearchParams(previous => {
       const params = new URLSearchParams(previous);
       params.set('section', nextSection);
@@ -492,6 +516,7 @@ export default function SubjectClassroom() {
 
   useEffect(() => {
     setLmsActivity(readLmsActivity(user?._id));
+    hydrateLmsActivity(user?._id).then(setLmsActivity);
   }, [user?._id]);
 
   useEffect(() => {

@@ -105,6 +105,11 @@ export const SocketProvider = ({ children }) => {
 
     // Don't re-connect if socket already exists for this user
     if (socketRef.current && socketRef.current.connected) return;
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+      setSocket(null);
+    }
 
     const transports = getSocketTransports();
     const s = io(import.meta.env.VITE_SOCKET_URL || '/', {
@@ -141,14 +146,32 @@ export const SocketProvider = ({ children }) => {
       }
     };
 
+    const announceRealtimeReconnect = () => {
+      const event = {
+        name: 'socket_reconnected',
+        payload: {},
+        domains: ['dashboard', 'students', 'teachers', 'subjects', 'lectures', 'attendance', 'timetable', 'lms', 'notifications', 'chat'],
+        at: Date.now(),
+      };
+      setRealtimeEvent(event);
+      setRealtimeVersion(value => value + 1);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:realtime-change', { detail: event }));
+        window.dispatchEvent(new CustomEvent('studysphere:data-refresh'));
+      }
+    };
+
     s.on('connect', () => {
       joinRoom();
     });
 
     // Re-join on every reconnect (network drop recovery)
-    s.on('reconnect', () => {
+    const handleReconnect = () => {
       joinRoom();
-    });
+      announceRealtimeReconnect();
+    };
+    s.on('reconnect', handleReconnect);
+    s.io.on('reconnect', handleReconnect);
 
     // If already connected (e.g. hot-reload), join immediately
     if (s.connected) joinRoom();
@@ -175,7 +198,8 @@ export const SocketProvider = ({ children }) => {
 
     return () => {
       s.off('connect');
-      s.off('reconnect');
+      s.off('reconnect', handleReconnect);
+      s.io.off('reconnect', handleReconnect);
       s.off('connect_error');
       s.offAny(forwardRealtimeEvent);
       if (s.connected) s.disconnect();

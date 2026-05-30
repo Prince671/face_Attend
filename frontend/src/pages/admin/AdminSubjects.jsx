@@ -13,7 +13,7 @@ import AppConfirmModal from '../../components/AppConfirmModal';
 import BulkProgressOverlay from '../../components/BulkProgressOverlay';
 import { handleDeleteScheduled } from '../../utils/deleteUndo';
 import { buildAcademicOptions, findAcademicBranch, subjectMatchesAcademicBranch } from '../../utils/academicStructure';
-import { lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
+import { hydrateLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
 
 const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const CSE_BRANCHES = ['Computer Science', 'Diploma CS'];
@@ -114,6 +114,7 @@ export default function AdminSubjects() {
 
   useEffect(() => {
     setLmsActivity(readLmsActivity(user?._id));
+    hydrateLmsActivity(user?._id).then(setLmsActivity);
   }, [user?._id]);
 
   useEffect(() => {

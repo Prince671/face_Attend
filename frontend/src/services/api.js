@@ -68,6 +68,13 @@ export const authAPI = {
   updateAdminScope: (data) => API.put('/auth/admin-scope', data),
 };
 
+export const preferenceAPI = {
+  getAll: () => API.get('/auth/preferences'),
+  get: (key) => API.get(`/auth/preferences/${encodeURIComponent(key)}`),
+  set: (key, value) => API.put(`/auth/preferences/${encodeURIComponent(key)}`, { value }),
+  remove: (key) => API.delete(`/auth/preferences/${encodeURIComponent(key)}`),
+};
+
 // === Admin ===
 export const adminAPI = {
   getPending: () => API.get('/admin/students/pending'),

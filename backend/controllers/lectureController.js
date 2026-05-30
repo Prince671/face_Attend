@@ -55,6 +55,19 @@ const emitLectureChange = async (req, lecture, event = 'lecture_updated') => {
     io.to(`user_${teacherId}`).emit(event, payload);
     io.to(`user_${teacherId}`).emit('lectures_changed', payload);
   });
+  const enrolledStudents = await User.find({
+    role: 'student',
+    enrolledSubjects: subject._id,
+    status: 'active',
+    isRestricted: { $ne: true },
+    pendingDeletion: { $ne: true }
+  }).select('_id role status isRestricted subjectRestrictions').lean();
+  enrolledStudents.filter(student => canReceiveSubjectUpdates(student, subject._id)).forEach(student => {
+    io.to(`student_${student._id}`).emit(event, payload);
+    io.to(`student_${student._id}`).emit('lectures_changed', payload);
+    io.to(`user_${student._id}`).emit(event, payload);
+    io.to(`user_${student._id}`).emit('lectures_changed', payload);
+  });
 };
 
 const repairResumedSubjectLectures = async (subjectSelector = {}) => {
@@ -247,13 +260,17 @@ const createLecture = async (req, res) => {
           data: { lectureId: lecture._id }
         })
       );
-      await Promise.all(notifPromises);
+      const notifications = await Promise.all(notifPromises);
 
       // FIX: Emit socket event to each enrolled student's room
       const io = req.app.get('io');
       if (io) {
         eligibleStudents.forEach(s => {
           io.to(`student_${s._id}`).emit('new_lecture', { lecture });
+        });
+        notifications.forEach(notification => {
+          io.to(`student_${notification.recipient}`).emit('notification_created', notification);
+          io.to(`user_${notification.recipient}`).emit('notification_created', notification);
         });
       }
     }
@@ -442,7 +459,7 @@ const startAttendance = async (req, res) => {
           priority: 'high'
         })
       );
-      await Promise.all(notifPromises);
+      const notifications = await Promise.all(notifPromises);
 
       const io = req.app.get('io');
       if (io) {
@@ -452,6 +469,10 @@ const startAttendance = async (req, res) => {
             subjectName: lecture.subject.name,
             expiresAt
           });
+        });
+        notifications.forEach(notification => {
+          io.to(`student_${notification.recipient}`).emit('notification_created', notification);
+          io.to(`user_${notification.recipient}`).emit('notification_created', notification);
         });
       }
     }

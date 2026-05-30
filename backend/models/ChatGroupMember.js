@@ -13,6 +13,7 @@ const chatGroupMemberSchema = new mongoose.Schema({
   clearedAt: { type: Date },
   isPinned: { type: Boolean, default: false },
   isArchived: { type: Boolean, default: false },
+  isHidden: { type: Boolean, default: false },
   lockCode: { type: String, default: '' },
   draftText: { type: String, default: '', maxlength: 5000 },
   hidePresence: { type: Boolean, default: false },

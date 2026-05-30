@@ -296,7 +296,7 @@ const createSystemMessage = async (req, group, text, systemEvent = 'message') =>
 };
 
 const groupSummary = async (group, userId) => {
-  const viewerMembership = await ChatGroupMember.findOne({ group: group._id, user: userId, isActive: true }).select('clearedAt isPinned isArchived lockCode draftText hidePresence blockedUsers').lean();
+  const viewerMembership = await ChatGroupMember.findOne({ group: group._id, user: userId, isActive: true }).select('clearedAt isPinned isArchived isHidden lockCode draftText hidePresence blockedUsers').lean();
   const visibleAfter = viewerMembership?.clearedAt ? { createdAt: { $gt: viewerMembership.clearedAt } } : {};
   const visibleToViewer = { ...visibleAfter, deletedFor: { $ne: userId } };
   const [members, lastMessage, unreadCount] = await Promise.all([
@@ -322,6 +322,7 @@ const groupSummary = async (group, userId) => {
     myPrefs: {
       isPinned: Boolean(viewerMembership?.isPinned),
       isArchived: Boolean(viewerMembership?.isArchived),
+      isHidden: Boolean(viewerMembership?.isHidden),
       isLocked: Boolean(viewerMembership?.lockCode),
       lockCode: viewerMembership?.lockCode || '',
       draftText: viewerMembership?.draftText || '',
@@ -1215,6 +1216,7 @@ const updateMemberPrefs = async (req, res) => {
     const update = {};
     if (req.body.isPinned !== undefined) update.isPinned = req.body.isPinned === true;
     if (req.body.isArchived !== undefined) update.isArchived = req.body.isArchived === true;
+    if (req.body.isHidden !== undefined) update.isHidden = req.body.isHidden === true;
     if (req.body.lockCode !== undefined) update.lockCode = String(req.body.lockCode || '').slice(0, 80);
     if (req.body.draftText !== undefined) update.draftText = String(req.body.draftText || '').slice(0, 5000);
     if (req.body.hidePresence !== undefined) update.hidePresence = req.body.hidePresence === true;

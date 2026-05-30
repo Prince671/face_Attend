@@ -46,7 +46,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import { chatAPI } from '../../services/api';
+import { chatAPI, preferenceAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { SkeletonLine } from '../../components/LoadingStates';
@@ -171,6 +171,10 @@ const removeHiddenChat = (prefs = {}, groupId = '') => {
   const hidden = (prefs.hidden || []).filter(id => String(id) !== String(groupId));
   return hidden.length === (prefs.hidden || []).length ? prefs : { ...prefs, hidden };
 };
+const addHiddenChat = (prefs = {}, groupId = '') => ({
+  ...prefs,
+  hidden: [...new Set([...(prefs.hidden || []), String(groupId)].filter(Boolean))],
+});
 const readQuickReplies = (userId) => {
   if (typeof window === 'undefined') return [];
   try {
@@ -189,6 +193,13 @@ const buildMessagePreview = (text = '') => {
   const linePreview = lines.slice(0, 7).join('\n');
   const preview = linePreview.length > 520 ? `${linePreview.slice(0, 520).trimEnd()}...` : linePreview;
   return { preview, isLong: lines.length > 7 || String(text).length > 520 };
+};
+const chatListPreviewText = (group) => {
+  const text = String(group?.lastMessage?.text || '').replace(/\s+/g, ' ').trim();
+  if (text) return text.length > 90 ? `${text.slice(0, 90).trimEnd()}...` : text;
+  const attachmentName = group?.lastMessage?.attachments?.[0]?.name;
+  if (attachmentName) return attachmentName;
+  return `${group?.members?.length || 0} members`;
 };
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const messageUrlPattern = /((?:https?:\/\/|www\.)[^\s<>()]+[^\s<>().,!?:;"'])/gi;
@@ -909,16 +920,19 @@ export default function StudentRooms() {
         const next = { ...current };
         next.pinned = rows.filter(group => group.myPrefs?.isPinned).map(group => String(group._id));
         next.archived = rows.filter(group => group.myPrefs?.isArchived).map(group => String(group._id));
-        next.hidden = (current.hidden || []).filter(id => {
-          const group = rows.find(item => String(item._id) === String(id));
-          return group && (!isPrivateGroup(group) || Number(group.unreadCount || 0) === 0);
-        });
+        next.hidden = rows
+          .filter(group => group.myPrefs?.isHidden || (current.hidden || []).includes(String(group._id)))
+          .filter(group => isPrivateGroup(group) && Number(group.unreadCount || 0) === 0)
+          .map(group => String(group._id));
         next.locked = rows.reduce((acc, group) => {
           if (group.myPrefs?.isLocked) acc[String(group._id)] = { code: group.myPrefs?.lockCode || lockedGroups[String(group._id)]?.code || '', lockedAt: new Date().toISOString() };
           return acc;
         }, current.locked || {});
         return next;
       });
+      rows
+        .filter(group => group.myPrefs?.isHidden && isPrivateGroup(group) && Number(group.unreadCount || 0) > 0)
+        .forEach(group => chatAPI.updateMemberPrefs(group._id, { isHidden: false }).catch(() => {}));
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not load rooms');
     } finally {
@@ -1028,8 +1042,37 @@ export default function StudentRooms() {
   }, [activeGroupId, loadMessages]);
 
   useEffect(() => {
-    setChatPrefs(readChatPrefs(user?._id));
+    const localPrefs = readChatPrefs(user?._id);
+    setChatPrefs(localPrefs);
     setQuickReplies(readQuickReplies(user?._id));
+    if (!user?._id) return undefined;
+
+    let ignore = false;
+    preferenceAPI.getAll()
+      .then(res => {
+        if (ignore) return;
+        const preferences = res.data?.preferences || {};
+        const savedNicknames = preferences['chat.nicknames'];
+        const savedQuickReplies = preferences['chat.quickReplies'];
+
+        if (savedNicknames && typeof savedNicknames === 'object' && !Array.isArray(savedNicknames)) {
+          setChatPrefs(current => {
+            const next = {
+              ...current,
+              nicknames: { ...(current.nicknames || {}), ...savedNicknames },
+            };
+            writeChatPrefs(user._id, next);
+            return next;
+          });
+        }
+        if (Array.isArray(savedQuickReplies)) {
+          const nextReplies = savedQuickReplies.slice(0, 30);
+          setQuickReplies(nextReplies);
+          writeQuickReplies(user._id, nextReplies);
+        }
+      })
+      .catch(() => {});
+    return () => { ignore = true; };
   }, [user?._id]);
 
   useEffect(() => {
@@ -1134,9 +1177,14 @@ export default function StudentRooms() {
 
   useEffect(() => {
     if (!socket || !activeGroupId) return undefined;
-    socket.emit('chat_join_room', activeGroupId);
+    const joinActiveRoom = () => socket.emit('chat_join_room', activeGroupId);
+    joinActiveRoom();
+    socket.on('connect', joinActiveRoom);
+    socket.io?.on?.('reconnect', joinActiveRoom);
     setOnlineUserIds([]);
     return () => {
+      socket.off('connect', joinActiveRoom);
+      socket.io?.off?.('reconnect', joinActiveRoom);
       socket.emit('chat_leave_room', activeGroupId);
       setOnlineUserIds([]);
     };
@@ -1147,6 +1195,7 @@ export default function StudentRooms() {
     const onMessage = ({ groupId, message }) => {
       const groupExists = groupsRef.current.some(group => String(group._id) === String(groupId));
       persistChatPrefs(current => removeHiddenChat(current, groupId));
+      chatAPI.updateMemberPrefs(groupId, { isHidden: false }).catch(() => {});
       setGroups(current => current.map(group => String(group._id) === String(groupId)
         ? { ...group, lastMessage: message, lastMessageAt: message.createdAt, unreadCount: String(activeGroupId) === String(groupId) ? 0 : (group.unreadCount || 0) + 1 }
         : group));
@@ -1241,6 +1290,7 @@ export default function StudentRooms() {
     openingUnreadCountRef.current = Number(group?.unreadCount || 0);
     if (isPrivateGroup(group)) {
       persistChatPrefs(current => removeHiddenChat(current, groupId));
+      chatAPI.updateMemberPrefs(groupId, { isHidden: false }).catch(() => {});
     }
     setActiveGroupId(groupId);
     setGroups(current => current.map(group => String(group._id) === String(groupId) ? { ...group, unreadCount: 0 } : group));
@@ -1663,10 +1713,11 @@ export default function StudentRooms() {
     if (!group?._id) return;
     try {
       if (isPrivateGroup(group)) {
-        persistChatPrefs(current => ({
-          ...current,
-          hidden: [...new Set([...(current.hidden || []), String(group._id)])],
-        }));
+        await chatAPI.clearGroupChat(group._id);
+        persistChatPrefs(current => addHiddenChat(current, group._id));
+        await chatAPI.updateMemberPrefs(group._id, { isHidden: true });
+        setGroups(current => current.map(item => item._id === group._id ? { ...item, lastMessage: null, unreadCount: 0, lastMessageAt: null } : item));
+        if (String(activeGroupId) === String(group._id)) setMessages([]);
         toast.success('Private chat deleted from your list');
       } else {
         await chatAPI.clearGroupChat(group._id);
@@ -1795,6 +1846,7 @@ export default function StudentRooms() {
     const next = typeof updater === 'function' ? updater(readQuickReplies(user?._id)) : updater;
     setQuickReplies(next);
     writeQuickReplies(user?._id, next);
+    if (user?._id) preferenceAPI.set('chat.quickReplies', next).catch(() => {});
     return next;
   };
 
@@ -2032,15 +2084,18 @@ export default function StudentRooms() {
   const saveNickname = () => {
     const person = confirmAction?.user;
     if (!person?._id) return;
+    let nextNicknames = {};
     persistChatPrefs(current => {
       const nicknames = { ...(current.nicknames || {}) };
       if (nicknameDraft.trim()) nicknames[String(person._id)] = nicknameDraft.trim();
       else delete nicknames[String(person._id)];
+      nextNicknames = nicknames;
       return { ...current, nicknames };
     });
+    if (user?._id) preferenceAPI.set('chat.nicknames', nextNicknames).catch(() => {});
     setConfirmAction(null);
     setNicknameDraft('');
-    toast.success('Nickname saved on this device');
+    toast.success('Nickname saved');
   };
 
   const openGallery = async () => {
@@ -2231,6 +2286,7 @@ export default function StudentRooms() {
       });
       setGroups(current => [res.data.group, ...current.filter(group => group._id !== res.data.group._id)]);
       persistChatPrefs(current => removeHiddenChat(current, res.data.group?._id));
+      chatAPI.updateMemberPrefs(res.data.group?._id, { isHidden: false }).catch(() => {});
       setInviteRecipientSearch('');
       toast.success(`Invite sent to ${student.name}`);
     } catch (error) {
@@ -2569,7 +2625,7 @@ export default function StudentRooms() {
                   </div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-2">
                     <p className="min-w-0 truncate text-sm text-slate-400">
-                      {isLockedChat ? 'Locked chat' : draftText ? <><span className="font-semibold text-primary-200">Draft: </span>{draftText}</> : (group.lastMessage?.text ? renderTextWithMentions(group.lastMessage.text) : `${group.members?.length || 0} members`)}
+                      {isLockedChat ? 'Locked chat' : draftText ? <><span className="font-semibold text-primary-200">Draft: </span>{draftText}</> : chatListPreviewText(group)}
                     </p>
                   </div>
                 </div>

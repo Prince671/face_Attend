@@ -1,19 +1,35 @@
 import React, { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { preferenceAPI } from '../services/api';
 
 const getInitialTheme = () => {
   if (typeof window === 'undefined') return 'dark';
   return localStorage.getItem('theme') || 'dark';
 };
 
+const hasAuthToken = () => typeof window !== 'undefined' && Boolean(localStorage.getItem('token'));
+
 export default function ThemeToggle({ className = '' }) {
   const [theme, setTheme] = useState(getInitialTheme);
   const isLight = theme === 'light';
 
   useEffect(() => {
+    if (!hasAuthToken()) return undefined;
+    let mounted = true;
+    preferenceAPI.get('theme')
+      .then(res => {
+        const savedTheme = res.data?.value;
+        if (mounted && (savedTheme === 'light' || savedTheme === 'dark')) setTheme(savedTheme);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
     document.documentElement.classList.toggle('light', isLight);
     document.documentElement.classList.toggle('dark', !isLight);
     localStorage.setItem('theme', theme);
+    if (hasAuthToken()) preferenceAPI.set('theme', theme).catch(() => {});
   }, [isLight, theme]);
 
   return (
