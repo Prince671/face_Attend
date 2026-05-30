@@ -52,6 +52,11 @@ const memberBase = (user) => ({
 const validObjectIds = (ids = []) => [...new Set(ids.map(String).filter(id => mongoose.Types.ObjectId.isValid(id)))];
 const newInviteCode = () => Math.random().toString(36).slice(2, 8).toUpperCase() + Date.now().toString(36).slice(-4).toUpperCase();
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const inviteExpired = (group) => {
+  if (!group?.inviteExpiresAt) return false;
+  const expiresAt = new Date(group.inviteExpiresAt).getTime();
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+};
 
 const getActiveMembership = async (groupId, userId) => ChatGroupMember.findOne({
   group: groupId,
@@ -91,6 +96,28 @@ const canUsePermission = (group, membership, key) => {
   if (membership?.role === 'admin') return true;
   return group?.permissions?.[key] === 'members';
 };
+const permissionValue = (group, key) => group?.permissions?.[key] || (key === 'sendMessages' ? 'members' : 'admins');
+const groupSettingSnapshot = (group) => ({
+  name: String(group?.name || '').trim(),
+  description: String(group?.description || '').trim(),
+  chatMode: group?.chatMode || 'everyone',
+  autoDeleteAfterHours: Number(group?.autoDeleteAfterHours || 0),
+  showSystemMessages: group?.showSystemMessages !== false,
+  permissions: {
+    editInfo: permissionValue(group, 'editInfo'),
+    addMembers: permissionValue(group, 'addMembers'),
+    sendMessages: permissionValue(group, 'sendMessages'),
+    pinMessages: permissionValue(group, 'pinMessages'),
+  },
+});
+const groupSettingsChanged = (before, after) => (
+  before.name !== after.name ||
+  before.description !== after.description ||
+  before.chatMode !== after.chatMode ||
+  before.autoDeleteAfterHours !== after.autoDeleteAfterHours ||
+  before.showSystemMessages !== after.showSystemMessages ||
+  Object.keys(before.permissions).some(key => before.permissions[key] !== after.permissions[key])
+);
 
 const cloudinaryResourceType = (kind) => {
   if (['image', 'gif'].includes(kind)) return 'image';
@@ -487,6 +514,7 @@ const updateGroup = async (req, res) => {
     if (!ensureStudent(req, res)) return;
     const { group, membership } = await assertMember(req, req.params.groupId);
     if (!canUsePermission(group, membership, 'editInfo') && !(await canManageRoom(group, membership))) return res.status(403).json({ success: false, message: 'Only permitted members can update this room.' });
+    const beforeSettings = groupSettingSnapshot(group);
     if (req.body.name !== undefined) group.name = String(req.body.name || '').trim() || group.name;
     if (req.body.description !== undefined) group.description = String(req.body.description || '').trim();
     if (['everyone', 'admins_only'].includes(req.body.chatMode)) group.chatMode = req.body.chatMode;
@@ -505,7 +533,9 @@ const updateGroup = async (req, res) => {
     if (req.body.permissions?.addMembers && ['admins', 'members'].includes(req.body.permissions.addMembers)) group.permissions.addMembers = req.body.permissions.addMembers;
     if (req.body.permissions?.pinMessages && ['admins', 'members'].includes(req.body.permissions.pinMessages)) group.permissions.pinMessages = req.body.permissions.pinMessages;
     await group.save();
-    await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) updated group settings.`, 'group_updated');
+    if (groupSettingsChanged(beforeSettings, groupSettingSnapshot(group))) {
+      await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) updated group settings.`, 'group_updated');
+    }
     const summary = await groupSummary(group, req.user._id);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });
     res.json({ success: true, group: summary });
@@ -1093,9 +1123,15 @@ const joinByInvite = async (req, res) => {
       code = url.searchParams.get('invite') || url.searchParams.get('code') || rawCode;
     } catch (_) {}
     code = String(code || '').trim().toUpperCase();
-    const group = await ChatGroup.findOne({ inviteCode: code, inviteEnabled: true, isDeleted: { $ne: true } });
+    const group = await ChatGroup.findOne({ inviteCode: code, isDeleted: { $ne: true } });
     if (!group) return res.status(404).json({ success: false, message: 'Invite link is invalid or expired.' });
-    if (group.inviteExpiresAt && group.inviteExpiresAt < new Date()) return res.status(410).json({ success: false, message: 'This invite link has expired.' });
+    if (group.inviteEnabled === false || inviteExpired(group)) {
+      if (inviteExpired(group) && group.inviteEnabled !== false) {
+        group.inviteEnabled = false;
+        await group.save();
+      }
+      return res.status(410).json({ success: false, message: 'This invite link has expired.' });
+    }
     if (group.inviteMaxUses && Number(group.inviteUses || 0) >= Number(group.inviteMaxUses)) return res.status(410).json({ success: false, message: 'This invite link has reached its join limit.' });
     const base = memberBase(group);
     if (req.user.department !== base.department || Number(req.user.semester) !== Number(base.semester)) {

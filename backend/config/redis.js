@@ -12,9 +12,10 @@ const readMs = (value, fallback, max = Number.POSITIVE_INFINITY) => {
 };
 
 const MAX_REDIS_WAIT_MS = readMs(process.env.REDIS_MAX_WAIT_MS, 30 * 1000, 30 * 1000);
-const CONNECT_TIMEOUT_MS = readMs(process.env.REDIS_CONNECT_TIMEOUT_MS, 1500, MAX_REDIS_WAIT_MS);
-const COMMAND_TIMEOUT_MS = readMs(process.env.REDIS_COMMAND_TIMEOUT_MS, 1200, MAX_REDIS_WAIT_MS);
+const CONNECT_TIMEOUT_MS = readMs(process.env.REDIS_CONNECT_TIMEOUT_MS, 10 * 1000, MAX_REDIS_WAIT_MS);
+const COMMAND_TIMEOUT_MS = readMs(process.env.REDIS_COMMAND_TIMEOUT_MS, 2500, MAX_REDIS_WAIT_MS);
 const RETRY_COOLDOWN_MS = readMs(process.env.REDIS_RETRY_COOLDOWN_MS, 60 * 1000);
+const REDIS_SOCKET_FAMILY = Number(process.env.REDIS_SOCKET_FAMILY || 4);
 
 const isCacheEnabled = () => {
   if (String(process.env.CACHE_ENABLED || 'true').toLowerCase() === 'false') return false;
@@ -70,12 +71,17 @@ const getRedisClient = () => {
   if (!redisClient) {
     const url = normalizeRedisUrl();
     if (!url) return null;
+    const parsedUrl = new URL(url);
+    const isTls = parsedUrl.protocol === 'rediss:';
 
     redisClient = createClient({
       url,
       disableOfflineQueue: true,
       socket: {
         connectTimeout: CONNECT_TIMEOUT_MS,
+        family: [4, 6].includes(REDIS_SOCKET_FAMILY) ? REDIS_SOCKET_FAMILY : undefined,
+        tls: isTls,
+        servername: isTls ? parsedUrl.hostname : undefined,
         reconnectStrategy: (retries) => Math.min(retries * 100, 1000),
       },
     });
@@ -110,9 +116,9 @@ const connectRedis = async () => {
         redisConnectionPromise = null;
         redisDisabledUntil = Date.now() + RETRY_COOLDOWN_MS;
         try {
-          if (!client.isOpen) client.destroy?.();
+          client.destroy?.();
         } catch (_) {}
-        if (!client.isOpen) redisClient = null;
+        redisClient = null;
         warnOnce(`Redis cache unavailable: ${error.message}. Retrying in ${Math.round(RETRY_COOLDOWN_MS / 1000)}s.`);
         return null;
       });

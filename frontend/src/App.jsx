@@ -179,10 +179,9 @@ const DataRefreshBridge = () => {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('studysphere:data-refresh'));
-      dispatch(apiSlice.util.invalidateTags(DATA_REFRESH_TAGS));
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [dispatch, location.key, location.pathname, location.search]);
+  }, [location.key, location.pathname, location.search]);
 
   return null;
 };

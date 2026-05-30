@@ -167,6 +167,10 @@ const writeChatDrafts = (userId, drafts) => {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(chatDraftsKey(userId), JSON.stringify(drafts || {}));
 };
+const removeHiddenChat = (prefs = {}, groupId = '') => {
+  const hidden = (prefs.hidden || []).filter(id => String(id) !== String(groupId));
+  return hidden.length === (prefs.hidden || []).length ? prefs : { ...prefs, hidden };
+};
 const readQuickReplies = (userId) => {
   if (typeof window === 'undefined') return [];
   try {
@@ -192,6 +196,15 @@ const normalizedHref = (value = '') => {
   const trimmed = String(value || '').trim();
   if (!trimmed) return '';
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+const isSameAppRoomInvite = (value = '') => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const url = new URL(normalizedHref(value), window.location.origin);
+    return url.origin === window.location.origin && url.pathname === '/student/rooms' && (url.searchParams.has('invite') || url.searchParams.has('code'));
+  } catch {
+    return false;
+  }
 };
 const renderMarqueeName = (name = '', className = '') => {
   const label = String(name || '').trim();
@@ -398,6 +411,7 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
   const videoRef = useRef(null);
   const scannerControlsRef = useRef(null);
   const frameRef = useRef(0);
+  const nativeScanAtRef = useRef(0);
   const detectedRef = useRef(false);
   const [error, setError] = useState('');
   const [manualCode, setManualCode] = useState('');
@@ -450,32 +464,74 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
         const { BrowserQRCodeReader } = await import('@zxing/browser');
         if (stopped) return;
         const reader = new BrowserQRCodeReader(undefined, {
-          delayBetweenScanAttempts: 120,
-          tryPlayVideoTimeout: 1800,
+          delayBetweenScanAttempts: 80,
+          tryPlayVideoTimeout: 2500,
         });
-        const controls = await reader.decodeFromConstraints(
+
+        const startNativeDetector = async () => {
+          const Detector = window.BarcodeDetector;
+          if (!Detector || !videoRef.current) return;
+          try {
+            const formats = await Detector.getSupportedFormats?.();
+            if (formats?.length && !formats.includes('qr_code')) return;
+            const detector = new Detector({ formats: ['qr_code'] });
+            const scanFrame = async (timestamp = 0) => {
+              if (stopped || detectedRef.current || !videoRef.current) return;
+              frameRef.current = window.requestAnimationFrame(scanFrame);
+              if (timestamp - nativeScanAtRef.current < 140 || videoRef.current.readyState < 2) return;
+              nativeScanAtRef.current = timestamp;
+              try {
+                const codes = await detector.detect(videoRef.current);
+                const value = codes?.[0]?.rawValue || codes?.[0]?.rawData || '';
+                if (value) await handleDetected(value);
+              } catch (_) {}
+            };
+            frameRef.current = window.requestAnimationFrame(scanFrame);
+          } catch (_) {}
+        };
+
+        const scanCallback = async (result, scanError, controlsRef) => {
+          if (stopped || detectedRef.current) return;
+          if (result) {
+            const value = result.getText?.() || result.text || '';
+            if (value.trim()) {
+              controlsRef?.stop?.();
+              await handleDetected(value);
+            }
+          } else if (scanError && !/NotFoundException/i.test(scanError?.name || scanError?.message || '')) {
+            console.debug?.('QR scanner retry:', scanError?.message || scanError);
+          }
+        };
+
+        const constraintOptions = [
           {
             video: {
               facingMode: { ideal: 'environment' },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
+              width: { ideal: 1920, min: 640 },
+              height: { ideal: 1080, min: 480 },
+              advanced: [
+                { focusMode: 'continuous' },
+                { exposureMode: 'continuous' },
+              ],
             },
             audio: false,
           },
-          videoRef.current,
-          async (result, scanError, controlsRef) => {
-            if (stopped || detectedRef.current) return;
-            if (result) {
-              const value = result.getText?.() || result.text || '';
-              if (value.trim()) {
-                controlsRef?.stop?.();
-                await handleDetected(value);
-              }
-            } else if (scanError && !/NotFoundException/i.test(scanError?.name || scanError?.message || '')) {
-              console.debug?.('QR scanner retry:', scanError?.message || scanError);
-            }
+          { video: { facingMode: { ideal: 'environment' } }, audio: false },
+          { video: true, audio: false },
+        ];
+
+        let controls = null;
+        let lastStartError = null;
+        for (const constraints of constraintOptions) {
+          try {
+            controls = await reader.decodeFromConstraints(constraints, videoRef.current, scanCallback);
+            break;
+          } catch (startError) {
+            lastStartError = startError;
+            if (startError?.name === 'NotAllowedError') throw startError;
           }
-        );
+        }
+        if (!controls) throw lastStartError || new Error('QR scanner could not start');
         if (stopped) {
           controls.stop();
           return;
@@ -483,6 +539,7 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
         scannerControlsRef.current = controls;
         setScanPhase('scanning');
         setScannerStatus('');
+        startNativeDetector();
       } catch (err) {
         const message = err?.name === 'NotAllowedError'
           ? 'Camera permission is required to scan a room QR.'
@@ -501,7 +558,7 @@ const QrScannerModal = ({ open, onClose, onDetected }) => {
     <FeaturePanel open={open} title="Scan Room QR" onClose={onClose}>
       <div className="space-y-4">
         <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-slate-900">
-          <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
+          <video ref={videoRef} muted playsInline autoPlay className="h-full w-full object-cover" />
           <div className="pointer-events-none absolute inset-8 rounded-3xl border-2 border-primary-300/80 shadow-[0_0_0_999px_rgba(2,6,23,0.32)]" />
           <span className={`room-qr-scan-line pointer-events-none absolute left-10 right-10 top-10 h-0.5 rounded-full bg-primary-200 shadow-[0_0_18px_rgba(165,180,252,0.9)] ${scanPhase === 'complete' ? 'room-qr-scan-line-complete' : ''}`} />
           <span className="pointer-events-none absolute left-8 top-8 h-8 w-8 rounded-tl-3xl border-l-4 border-t-4 border-primary-200" />
@@ -637,6 +694,7 @@ export default function StudentRooms() {
   const [emojiCategory, setEmojiCategory] = useState('recent');
   const [mentionState, setMentionState] = useState({ open: false, query: '', start: -1, activeIndex: 0 });
   const [selectedMentionIds, setSelectedMentionIds] = useState([]);
+  const [roomActionBusy, setRoomActionBusy] = useState('');
   const groupsRef = useRef([]);
   const attachmentMediaTypeRef = useRef('');
   const longPressRef = useRef(null);
@@ -768,12 +826,13 @@ export default function StudentRooms() {
         urlParts.push(...renderMentionParts(textValue.slice(lastUrlIndex, urlMatch.index), `text-${lastUrlIndex}`));
       }
       const urlText = urlMatch[0];
+      const sameAppInvite = isSameAppRoomInvite(urlText);
       urlParts.push(
         <a
           key={`url-${urlMatch.index}-${urlText}`}
           href={normalizedHref(urlText)}
-          target="_blank"
-          rel="noopener noreferrer"
+          target={sameAppInvite ? undefined : '_blank'}
+          rel={sameAppInvite ? undefined : 'noopener noreferrer'}
           onClick={event => event.stopPropagation()}
           className="font-semibold text-sky-300 underline decoration-sky-300/40 underline-offset-2 hover:text-sky-200"
         >
@@ -804,9 +863,20 @@ export default function StudentRooms() {
   const displayedGroups = useMemo(() => {
     const query = chatSearch.trim();
     const lowered = query.toLowerCase();
+    const matchesQuery = (group) => {
+      if (!lowered) return false;
+      return [
+        group.name,
+        group.description,
+        group.lastMessage?.text,
+        ...(group.members || []).map(member => memberUser(member)?.name),
+        ...(group.members || []).map(member => memberUser(member)?.studentId),
+      ].some(value => String(value || '').toLowerCase().includes(lowered));
+    };
     return groups
       .filter(group => {
-        if (hiddenGroupIds.has(String(group._id))) return false;
+        const hidden = hiddenGroupIds.has(String(group._id));
+        if (hidden && (!isPrivateGroup(group) || !matchesQuery(group))) return false;
         const archived = archivedGroupIds.has(String(group._id));
         if (chatFilter === 'archived') {
           if (!archived) return false;
@@ -819,13 +889,7 @@ export default function StudentRooms() {
         if (chatFilter === 'unread' && !(Number(group.unreadCount || 0) > 0)) return false;
         if (chatFilter === 'groups' && isPrivateGroup(group)) return false;
         if (!lowered) return true;
-        return [
-          group.name,
-          group.description,
-          group.lastMessage?.text,
-          ...(group.members || []).map(member => memberUser(member)?.name),
-          ...(group.members || []).map(member => memberUser(member)?.studentId),
-        ].some(value => String(value || '').toLowerCase().includes(lowered));
+        return matchesQuery(group);
       })
       .sort((a, b) => {
         const aPinned = pinnedGroupIds.has(String(a._id));
@@ -845,6 +909,10 @@ export default function StudentRooms() {
         const next = { ...current };
         next.pinned = rows.filter(group => group.myPrefs?.isPinned).map(group => String(group._id));
         next.archived = rows.filter(group => group.myPrefs?.isArchived).map(group => String(group._id));
+        next.hidden = (current.hidden || []).filter(id => {
+          const group = rows.find(item => String(item._id) === String(id));
+          return group && (!isPrivateGroup(group) || Number(group.unreadCount || 0) === 0);
+        });
         next.locked = rows.reduce((acc, group) => {
           if (group.myPrefs?.isLocked) acc[String(group._id)] = { code: group.myPrefs?.lockCode || lockedGroups[String(group._id)]?.code || '', lockedAt: new Date().toISOString() };
           return acc;
@@ -1078,10 +1146,7 @@ export default function StudentRooms() {
     if (!socket) return undefined;
     const onMessage = ({ groupId, message }) => {
       const groupExists = groupsRef.current.some(group => String(group._id) === String(groupId));
-      persistChatPrefs(current => {
-        const hidden = (current.hidden || []).filter(id => String(id) !== String(groupId));
-        return hidden.length === (current.hidden || []).length ? current : { ...current, hidden };
-      });
+      persistChatPrefs(current => removeHiddenChat(current, groupId));
       setGroups(current => current.map(group => String(group._id) === String(groupId)
         ? { ...group, lastMessage: message, lastMessageAt: message.createdAt, unreadCount: String(activeGroupId) === String(groupId) ? 0 : (group.unreadCount || 0) + 1 }
         : group));
@@ -1174,6 +1239,9 @@ export default function StudentRooms() {
     }
     const group = groups.find(item => String(item._id) === String(groupId));
     openingUnreadCountRef.current = Number(group?.unreadCount || 0);
+    if (isPrivateGroup(group)) {
+      persistChatPrefs(current => removeHiddenChat(current, groupId));
+    }
     setActiveGroupId(groupId);
     setGroups(current => current.map(group => String(group._id) === String(groupId) ? { ...group, unreadCount: 0 } : group));
     setReplyTo(null);
@@ -1433,15 +1501,19 @@ export default function StudentRooms() {
     socket?.emit('chat_typing', { groupId: activeGroupId, typing: false, mode: 'recording' });
   };
 
-  const updateGroup = async (payload) => {
+  const updateGroup = async (payload, options = {}) => {
+    const { busyKey = '', successMessage = 'Group changes saved', silentSuccess = false } = options;
+    if (busyKey) setRoomActionBusy(busyKey);
     try {
       const res = await chatAPI.updateGroup(activeGroup._id, payload);
       setGroups(current => current.map(group => group._id === res.data.group._id ? res.data.group : group));
-      toast.success('Group changes saved');
+      if (!silentSuccess) toast.success(successMessage);
       return true;
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not update room');
       return false;
+    } finally {
+      if (busyKey) setRoomActionBusy(current => current === busyKey ? '' : current);
     }
   };
 
@@ -1453,6 +1525,9 @@ export default function StudentRooms() {
       autoDeleteAfterHours: Number(infoDraft.autoDeleteAfterHours || 0),
       inviteEnabled: infoDraft.inviteEnabled,
       permissions: infoDraft.permissions,
+    }, {
+      busyKey: 'saveGroup',
+      successMessage: 'Group changes saved',
     });
     if (!saved) return;
     if (Boolean(infoDraft.hidePresence) !== Boolean(activeGroup.myPrefs?.hidePresence)) {
@@ -1471,6 +1546,7 @@ export default function StudentRooms() {
   const savePresencePrivacy = async (hidePresence) => {
     if (!activeGroup) return;
     setInfoDraft(current => ({ ...current, hidePresence }));
+    setRoomActionBusy('presence');
     try {
       const res = await chatAPI.updateMemberPrefs(activeGroup._id, { hidePresence });
       setGroups(current => current.map(group => group._id === res.data.group._id ? res.data.group : group));
@@ -1479,6 +1555,8 @@ export default function StudentRooms() {
     } catch (error) {
       setInfoDraft(current => ({ ...current, hidePresence: !hidePresence }));
       toast.error(error.response?.data?.message || 'Could not update privacy setting');
+    } finally {
+      setRoomActionBusy(current => current === 'presence' ? '' : current);
     }
   };
 
@@ -1991,6 +2069,7 @@ export default function StudentRooms() {
 
   const loadInvite = async () => {
     if (!activeGroup || !canManageGroup) return;
+    setRoomActionBusy('loadInvite');
     try {
       const res = await chatAPI.getInvite(activeGroup._id);
       setInvite(res.data);
@@ -2003,11 +2082,14 @@ export default function StudentRooms() {
       setQrImageSourceIndex(0);
     } catch {
       toast.error('Could not load invite');
+    } finally {
+      setRoomActionBusy(current => current === 'loadInvite' ? '' : current);
     }
   };
 
   const regenerateInviteLink = async () => {
     if (!activeGroup || !canManageGroup) return;
+    setRoomActionBusy('regenerateInvite');
     try {
       const res = await chatAPI.regenerateInvite(activeGroup._id, {
         expiresAt: inviteControls.expiresAt || undefined,
@@ -2020,6 +2102,8 @@ export default function StudentRooms() {
       toast.success('Invite link reset');
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not reset invite');
+    } finally {
+      setRoomActionBusy(current => current === 'regenerateInvite' ? '' : current);
     }
   };
 
@@ -2029,17 +2113,25 @@ export default function StudentRooms() {
       inviteRequireApproval: inviteControls.requireApproval,
       inviteExpiresAt: inviteControls.expiresAt || '',
       inviteMaxUses: Number(inviteControls.maxUses || 0),
+    }, {
+      busyKey: 'saveInvite',
+      successMessage: 'Invite controls saved',
+      silentSuccess: true,
     });
     if (saved) toast.success('Invite controls saved');
   };
 
   const loadJoinRequests = async () => {
     if (!activeGroup || !canManageGroup) return;
+    setRoomActionBusy('joinRequests');
     try {
       const res = await chatAPI.getJoinRequests(activeGroup._id);
       setJoinRequests(res.data.requests || []);
     } catch {
       setJoinRequests([]);
+      toast.error('Could not load join requests');
+    } finally {
+      setRoomActionBusy(current => current === 'joinRequests' ? '' : current);
     }
   };
 
@@ -2104,6 +2196,12 @@ export default function StudentRooms() {
     if (!code) return false;
     try {
       const res = await chatAPI.joinByInvite(code);
+      if (res.data.pendingApproval) {
+        setJoinCode('');
+        setShowQrScanner(false);
+        toast.success(res.data.message || 'Join request sent to room admins');
+        return true;
+      }
       setGroups(current => [res.data.group, ...current.filter(group => group._id !== res.data.group._id)]);
       setActiveGroupId(res.data.group._id);
       setJoinCode('');
@@ -2111,7 +2209,9 @@ export default function StudentRooms() {
       toast.success(res.data.alreadyMember ? 'Room opened' : 'Joined room');
       return true;
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Could not join room');
+      const status = error.response?.status;
+      const message = error.response?.data?.message || 'Could not join room';
+      toast.error(status === 410 ? 'This link is expired.' : message);
       return false;
     }
   }, []);
@@ -2130,12 +2230,26 @@ export default function StudentRooms() {
         inviteLink: activeInviteLink,
       });
       setGroups(current => [res.data.group, ...current.filter(group => group._id !== res.data.group._id)]);
+      persistChatPrefs(current => removeHiddenChat(current, res.data.group?._id));
       setInviteRecipientSearch('');
       toast.success(`Invite sent to ${student.name}`);
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not send invite');
     } finally {
       setInviteSendingId('');
+    }
+  };
+
+  const copyInviteLink = async (value = activeInviteLink) => {
+    if (!value) return;
+    setRoomActionBusy('copyInvite');
+    try {
+      await navigator.clipboard?.writeText(value);
+      toast.success('Invite link copied');
+    } catch {
+      toast.error('Could not copy invite link');
+    } finally {
+      setRoomActionBusy(current => current === 'copyInvite' ? '' : current);
     }
   };
 
@@ -2450,7 +2564,7 @@ export default function StudentRooms() {
                     <p className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-medium text-white">
                       {isArchivedChat && <Archive className="h-3 w-3 flex-shrink-0 text-slate-400" />}
                       {isLockedChat && <Lock className="h-3 w-3 flex-shrink-0 text-amber-300" />}
-                      {renderMarqueeName(group.name, 'block min-w-0 max-w-full truncate')}
+                      <span className="block min-w-0 max-w-full truncate">{group.name}</span>
                     </p>
                   </div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -2540,7 +2654,10 @@ export default function StudentRooms() {
                             </div>
                             {canManageGroup && infoDirty && (
                               <div className="mt-2 flex flex-wrap gap-1.5 sm:mt-3 sm:gap-2">
-                                <button type="button" disabled={!infoDraft.name.trim()} onClick={saveGroupInfo} className="btn-primary h-8 w-8 justify-center p-0 text-xs disabled:opacity-50 sm:h-auto sm:w-auto sm:px-4 sm:py-2" aria-label="Save changes"><Check className="h-4 w-4" /><span className="hidden sm:inline">Save changes</span></button>
+                                <button type="button" disabled={!infoDraft.name.trim() || roomActionBusy === 'saveGroup'} onClick={saveGroupInfo} className="btn-primary h-8 w-8 justify-center p-0 text-xs disabled:opacity-50 sm:h-auto sm:w-auto sm:px-4 sm:py-2" aria-label="Save changes">
+                                  {roomActionBusy === 'saveGroup' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                  <span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? 'Saving changes' : 'Save changes'}</span>
+                                </button>
                                 <button type="button" onClick={discardGroupInfoChanges} className="btn-secondary h-8 w-8 justify-center p-0 text-xs sm:h-auto sm:w-auto sm:px-4 sm:py-2" aria-label="Cancel changes"><X className="h-4 w-4" /><span className="hidden sm:inline">Cancel</span></button>
                               </div>
                             )}
@@ -2557,10 +2674,6 @@ export default function StudentRooms() {
                                 Private chat settings are shared by both members. Deleting this chat from your list only hides it for you; it will not remove messages or the chat for the other person.
                               </div>
                             )}
-                            <select className="input-field h-9 text-xs sm:h-10 sm:text-sm" value={infoDraft.chatMode} onChange={e => setInfoDraft(current => ({ ...current, chatMode: e.target.value }))}>
-                              <option value="everyone">Everyone can send</option>
-                              <option value="admins_only">Only admins can send</option>
-                            </select>
                             <select className="input-field h-9 text-xs sm:h-10 sm:text-sm" value={infoDraft.autoDeleteAfterHours} onChange={e => setInfoDraft(current => ({ ...current, autoDeleteAfterHours: e.target.value }))}>
                               <option value="0">Auto-delete off</option>
                               <option value="8">After 8 hours</option>
@@ -2603,7 +2716,10 @@ export default function StudentRooms() {
                               <input type="checkbox" checked={Boolean(infoDraft.hidePresence)} onChange={event => setInfoDraft(current => ({ ...current, hidePresence: event.target.checked }))} />
                               Hide my online and last seen
                             </label>
-                            <button type="button" disabled={!infoDirty || !infoDraft.name.trim()} onClick={saveGroupInfo} className="btn-primary h-9 justify-center text-xs disabled:opacity-50 sm:h-auto sm:text-sm"><Check className="h-4 w-4" /><span>Save</span><span className="hidden sm:inline"> changes</span></button>
+                            <button type="button" disabled={!infoDirty || !infoDraft.name.trim() || roomActionBusy === 'saveGroup'} onClick={saveGroupInfo} className="btn-primary h-9 justify-center text-xs disabled:opacity-50 sm:h-auto sm:text-sm">
+                              {roomActionBusy === 'saveGroup' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                              <span>{roomActionBusy === 'saveGroup' ? 'Saving' : 'Save'}</span><span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? ' changes' : ' changes'}</span>
+                            </button>
                           </div>
                         )}
                       </div>
@@ -2617,11 +2733,12 @@ export default function StudentRooms() {
                           <button
                             type="button"
                             onClick={() => savePresencePrivacy(!infoDraft.hidePresence)}
+                            disabled={roomActionBusy === 'presence'}
                             className={`grid h-9 w-9 flex-shrink-0 place-items-center rounded-full text-xs font-semibold sm:w-auto sm:px-3 sm:py-1.5 ${infoDraft.hidePresence ? 'bg-primary-500 text-white' : 'border border-white/10 text-slate-300 hover:bg-white/5'}`}
                             aria-label={infoDraft.hidePresence ? 'Presence hidden' : 'Presence visible'}
                           >
-                            <Eye className="h-4 w-4 sm:hidden" />
-                            <span className="hidden sm:inline">{infoDraft.hidePresence ? 'Hidden' : 'Visible'}</span>
+                            {roomActionBusy === 'presence' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4 sm:hidden" />}
+                            <span className="hidden sm:inline">{roomActionBusy === 'presence' ? 'Saving...' : (infoDraft.hidePresence ? 'Hidden' : 'Visible')}</span>
                           </button>
                         </div>
                       </div>
@@ -2633,8 +2750,8 @@ export default function StudentRooms() {
                               <h3 className="flex items-center gap-2 text-xs font-semibold text-white sm:text-sm"><QrCode className="h-4 w-4 flex-shrink-0 text-primary-300" /> <span className="truncate">Invite link</span></h3>
                               <p className="mt-1 hidden text-xs text-slate-500 sm:block">Create a WhatsApp-style link or QR, then send it by student ID.</p>
                             </div>
-                            <button type="button" onClick={loadInvite} className="btn-secondary inline-flex h-9 w-9 flex-shrink-0 items-center justify-center gap-2 p-0 text-xs sm:w-auto sm:min-w-[9.5rem] sm:px-3 sm:py-2" aria-label="Create invite">
-                              <QrCode className="h-4 w-4" /> <span className="hidden sm:inline">Create invite</span>
+                            <button type="button" disabled={roomActionBusy === 'loadInvite'} onClick={loadInvite} className="btn-secondary inline-flex h-9 w-9 flex-shrink-0 items-center justify-center gap-2 p-0 text-xs disabled:opacity-60 sm:w-auto sm:min-w-[9.5rem] sm:px-3 sm:py-2" aria-label="Create invite">
+                              {roomActionBusy === 'loadInvite' ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />} <span className="hidden sm:inline">{roomActionBusy === 'loadInvite' ? 'Creating QR' : 'Create invite'}</span>
                             </button>
                           </div>
                           {(activeInviteCode || invite?.inviteCode) && (
@@ -2657,8 +2774,12 @@ export default function StudentRooms() {
                                   Admin approval
                                 </label>
                                 <div className="grid gap-2 sm:col-span-3 sm:grid-cols-[minmax(10rem,1fr)_minmax(12rem,2fr)]">
-                                  <button type="button" onClick={saveInviteControls} className="btn-secondary inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none"><Check className="h-4 w-4 flex-shrink-0" /><span className="sm:hidden">Save</span><span className="hidden truncate sm:inline">Save controls</span></button>
-                                  <button type="button" onClick={regenerateInviteLink} className="btn-danger inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none"><RotateCcw className="h-4 w-4 flex-shrink-0" /><span className="sm:hidden">Reset</span><span className="hidden truncate sm:inline">Reset invite link</span></button>
+                                  <button type="button" disabled={roomActionBusy === 'saveInvite'} onClick={saveInviteControls} className="btn-secondary inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none disabled:opacity-60">
+                                    {roomActionBusy === 'saveInvite' ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" /> : <Check className="h-4 w-4 flex-shrink-0" />}<span className="sm:hidden">{roomActionBusy === 'saveInvite' ? 'Saving' : 'Save'}</span><span className="hidden truncate sm:inline">{roomActionBusy === 'saveInvite' ? 'Saving controls' : 'Save controls'}</span>
+                                  </button>
+                                  <button type="button" disabled={roomActionBusy === 'regenerateInvite'} onClick={regenerateInviteLink} className="btn-danger inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none disabled:opacity-60">
+                                    {roomActionBusy === 'regenerateInvite' ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" /> : <RotateCcw className="h-4 w-4 flex-shrink-0" />}<span className="sm:hidden">{roomActionBusy === 'regenerateInvite' ? 'Resetting' : 'Reset'}</span><span className="hidden truncate sm:inline">{roomActionBusy === 'regenerateInvite' ? 'Creating link' : 'Reset invite link'}</span>
+                                  </button>
                                 </div>
                               </div>
                               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(6rem,auto)_minmax(6rem,auto)]">
@@ -2671,8 +2792,8 @@ export default function StudentRooms() {
                                     placeholder="Search student ID to send"
                                   />
                                 </div>
-                                <button type="button" onClick={() => navigator.clipboard?.writeText(activeInviteLink).then(() => toast.success('Invite link copied'))} className="btn-secondary inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none sm:whitespace-nowrap" aria-label="Copy link">
-                                  <LinkIcon className="h-4 w-4" /><span className="hidden sm:inline">Copy link</span><span className="sm:hidden">Copy</span>
+                                <button type="button" disabled={roomActionBusy === 'copyInvite'} onClick={() => copyInviteLink()} className="btn-secondary inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none disabled:opacity-60 sm:whitespace-nowrap" aria-label="Copy link">
+                                  {roomActionBusy === 'copyInvite' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LinkIcon className="h-4 w-4" />}<span className="hidden sm:inline">{roomActionBusy === 'copyInvite' ? 'Copying link' : 'Copy link'}</span><span className="sm:hidden">{roomActionBusy === 'copyInvite' ? 'Copying' : 'Copy'}</span>
                                 </button>
                                 <button type="button" onClick={() => setShowInviteQr(true)} className="btn-primary inline-flex h-9 min-w-0 items-center justify-center gap-2 px-3 py-2 text-xs leading-none sm:whitespace-nowrap" aria-label="Show QR">
                                   <QrCode className="h-4 w-4" /><span className="hidden sm:inline">Show QR</span><span className="sm:hidden">QR</span>
@@ -2691,7 +2812,7 @@ export default function StudentRooms() {
                                           <p className="truncate text-sm text-white">{student.name}</p>
                                           <p className="font-mono text-xs text-slate-500">{student.studentId}</p>
                                         </div>
-                                        <Send className="h-4 w-4 text-primary-300" />
+                                        {inviteSendingId === student._id ? <Loader2 className="h-4 w-4 animate-spin text-primary-300" /> : <Send className="h-4 w-4 text-primary-300" />}
                                       </button>
                                     ))}
                                   {!studentOptions.filter(student => [student.name, student.studentId, student.email].some(value => String(value || '').toLowerCase().includes(inviteRecipientSearch.trim().toLowerCase()))).length && (
@@ -2702,7 +2823,9 @@ export default function StudentRooms() {
                             </div>
                           )}
                           <div className="mt-3">
-                            <button type="button" onClick={loadJoinRequests} className="btn-secondary inline-flex h-9 w-full items-center justify-center gap-2 px-3 py-2 text-xs leading-none"><UserPlus className="h-4 w-4 flex-shrink-0" /><span className="hidden sm:inline">Load join requests</span><span className="sm:hidden">Requests</span></button>
+                            <button type="button" disabled={roomActionBusy === 'joinRequests'} onClick={loadJoinRequests} className="btn-secondary inline-flex h-9 w-full items-center justify-center gap-2 px-3 py-2 text-xs leading-none disabled:opacity-60">
+                              {roomActionBusy === 'joinRequests' ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" /> : <UserPlus className="h-4 w-4 flex-shrink-0" />}<span className="hidden sm:inline">{roomActionBusy === 'joinRequests' ? 'Loading requests' : 'Load join requests'}</span><span className="sm:hidden">{roomActionBusy === 'joinRequests' ? 'Loading' : 'Requests'}</span>
+                            </button>
                             {joinRequests.length > 0 && (
                               <div className="mt-2 space-y-1 rounded-xl border border-white/10 p-2">
                                 {joinRequests.map(request => (
@@ -2777,6 +2900,18 @@ export default function StudentRooms() {
                                 </div>
                                 {member.role === 'admin' && <span className="rounded-full bg-primary-500/15 px-2 py-1 text-[10px] font-semibold text-primary-200">Admin</span>}
                                 <button type="button" onClick={() => { setNicknameDraft(localNicknames[String(mUser?._id)] || ''); setConfirmAction({ type: 'nickname', user: mUser }); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-slate-300 hover:bg-white/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs" aria-label="Set nickname"><Edit3 className="h-4 w-4" /><span className="hidden sm:inline">Nickname</span></button>
+                                {isGroupAdmin && !isMe && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmAction({ type: 'remove_member', member })}
+                                    className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-red-200 hover:bg-red-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
+                                    aria-label={`Remove ${mUser?.name || 'member'}`}
+                                    title="Remove member"
+                                  >
+                                    <UserMinus className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Remove</span>
+                                  </button>
+                                )}
                               </div>
                             );
                           })}
@@ -3116,9 +3251,9 @@ export default function StudentRooms() {
                 </div>
               )}
 
+              {canSend ? (
               <form id="chat-composer-form" onSubmit={sendMessage} className="border-t border-white/10 bg-slate-900/95 p-3">
-                {!canSend && <p className="mb-2 rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-200">Only group admins can send messages in this room.</p>}
-                {mentionState.open && canSend && (
+                {mentionState.open && (
                   <div data-chat-popover className="mb-2 max-h-64 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/95 p-2 shadow-2xl backdrop-blur">
                     {mentionParticipants.map((participant, index) => (
                       <button
@@ -3247,6 +3382,13 @@ export default function StudentRooms() {
                   </button>
                 </div>
               </form>
+              ) : (
+                <div className="border-t border-white/10 bg-slate-900/95 p-3">
+                  <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-center text-sm text-amber-100">
+                    Only group admins can send messages in this room.
+                  </div>
+                </div>
+              )}
                 </>
               )}
             </>
@@ -3415,13 +3557,12 @@ export default function StudentRooms() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                navigator.clipboard?.writeText(activeInviteLink || activeInviteCode || '');
-                toast.success('Invite link copied');
-              }}
-              className="btn-primary w-full justify-center"
+              disabled={roomActionBusy === 'copyInvite'}
+              onClick={() => copyInviteLink(activeInviteLink || activeInviteCode || '')}
+              className="btn-primary w-full justify-center disabled:opacity-60"
             >
-              Copy link
+              {roomActionBusy === 'copyInvite' && <Loader2 className="h-4 w-4 animate-spin" />}
+              {roomActionBusy === 'copyInvite' ? 'Copying link' : 'Copy link'}
             </button>
           </div>
         </div>

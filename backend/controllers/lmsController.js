@@ -27,6 +27,7 @@ const {
   restrictedSubjectErrorMessage,
 } = require('../utils/restrictionPolicy');
 const { uploadFile, deleteImage } = require('../utils/cloudinary');
+const { invalidateLmsCache } = require('../utils/cacheInvalidation');
 
 const isStaff = (user) => ['admin', 'teacher'].includes(user?.role);
 const objectId = (id) => new mongoose.Types.ObjectId(id);
@@ -344,6 +345,7 @@ const emitLmsEvent = async (req, subject, event, payload = {}) => {
   const io = req.app.get('io');
   if (!io || !subject) return;
   try {
+    await invalidateLmsCache();
     io.to('admin_room').emit(event, payload);
     io.to(adminDepartmentRoom(subject.department)).emit(event, payload);
     (subject.assignedTeachers || []).forEach(teacherId => io.to(`user_${teacherId}`).emit(event, payload));

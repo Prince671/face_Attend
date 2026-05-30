@@ -64,6 +64,24 @@ const eventDomains = {
 
 const SocketContext = createContext({ socket: null, realtimeEvent: null, realtimeVersion: 0 });
 
+const getSocketTransports = () => {
+  const configured = String(import.meta.env.VITE_SOCKET_TRANSPORTS || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+
+  if (configured.length) return configured;
+  if (/onrender\.com/i.test(String(import.meta.env.VITE_SOCKET_URL || ''))) return ['polling'];
+  if (String(import.meta.env.VITE_SOCKET_POLLING_ONLY || '').toLowerCase() === 'true') return ['polling'];
+  return ['polling', 'websocket'];
+};
+
+const shouldUpgradeSocket = () => {
+  if (String(import.meta.env.VITE_SOCKET_DISABLE_UPGRADE || '').toLowerCase() === 'true') return false;
+  if (/onrender\.com/i.test(String(import.meta.env.VITE_SOCKET_URL || ''))) return false;
+  return getSocketTransports().includes('websocket');
+};
+
 export const SocketProvider = ({ children }) => {
   const { user } = useAuth();
   const socketRef = useRef(null);
@@ -88,17 +106,26 @@ export const SocketProvider = ({ children }) => {
     // Don't re-connect if socket already exists for this user
     if (socketRef.current && socketRef.current.connected) return;
 
+    const transports = getSocketTransports();
     const s = io(import.meta.env.VITE_SOCKET_URL || '/', {
       auth: { token: localStorage.getItem('token') },
       withCredentials: true,
-      transports: ['polling', 'websocket'],
-      upgrade: true,
+      transports,
+      upgrade: shouldUpgradeSocket(),
       timeout: 20000,
       pingTimeout: 30000,
       pingInterval: 25000,
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
+    });
+
+    s.on('connect_error', (error) => {
+      if (error?.message === 'Socket authentication failed' || error?.message === 'Socket authentication required') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.assign('/login');
+      }
     });
 
     const joinRoom = () => {
@@ -149,6 +176,7 @@ export const SocketProvider = ({ children }) => {
     return () => {
       s.off('connect');
       s.off('reconnect');
+      s.off('connect_error');
       s.offAny(forwardRealtimeEvent);
       if (s.connected) s.disconnect();
       socketRef.current = null;

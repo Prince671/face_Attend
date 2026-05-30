@@ -262,6 +262,9 @@ Leave `WEBAUTHN_RP_ID` empty unless you are intentionally sharing passkeys acros
 ```env
 VITE_API_URL=http://localhost:5000/api
 VITE_SOCKET_URL=http://localhost:5000
+# Optional for Render/Vercel if websocket upgrade returns 500
+VITE_SOCKET_TRANSPORTS=polling
+VITE_SOCKET_DISABLE_UPGRADE=true
 ```
 
 If the frontend is served behind the same domain/proxy as the backend, both frontend values can be omitted because the app falls back to `/api` and `/`.
