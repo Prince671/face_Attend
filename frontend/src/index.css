@@ -2549,15 +2549,15 @@ html.light .student-rooms textarea::placeholder {
 }
 
 .face-scan-layer {
-  --scan-color: rgba(96, 165, 250, 0.86);
-  --scan-soft: rgba(96, 165, 250, 0.18);
-  --scan-strong: rgba(96, 165, 250, 0.44);
+  --scan-color: rgba(45, 212, 211, 0.95);
+  --scan-soft: rgba(45, 212, 211, 0.2);
+  --scan-strong: rgba(45, 212, 211, 0.62);
 }
 
 .face-scan-layer .face-scan-ready {
-  --scan-color: rgba(52, 211, 153, 0.9);
-  --scan-soft: rgba(52, 211, 153, 0.18);
-  --scan-strong: rgba(52, 211, 153, 0.44);
+  --scan-color: rgba(45, 212, 211, 0.98);
+  --scan-soft: rgba(45, 212, 211, 0.22);
+  --scan-strong: rgba(45, 212, 211, 0.68);
 }
 
 .face-scan-focus {
@@ -2590,7 +2590,7 @@ html.light .student-rooms textarea::placeholder {
   border-radius: 999px;
   background: linear-gradient(90deg, transparent, var(--scan-color), transparent);
   box-shadow: 0 0 18px var(--scan-color), 0 0 34px var(--scan-soft);
-  animation: faceScanBeam 1.55s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation: faceScanBeam 0.95s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
 .face-scan-beam {
@@ -2600,13 +2600,64 @@ html.light .student-rooms textarea::placeholder {
 
 .face-scan-box {
   color: var(--scan-color);
-  overflow: hidden;
+  overflow: visible;
+  border-radius: 0;
+}
+
+.face-scan-box-detecting,
+.face-scan-box-ready {
+  filter: drop-shadow(0 0 10px var(--scan-soft));
 }
 
 .face-scan-box-beam {
-  left: 4%;
-  right: 4%;
-  animation-duration: 1.15s;
+  left: 2%;
+  right: 2%;
+  top: 50%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--scan-color);
+  box-shadow: 0 0 12px var(--scan-color), 0 0 24px var(--scan-soft);
+  animation: faceScanFlatBeam 0.46s ease-in-out infinite;
+}
+
+.face-scan-corner {
+  position: absolute;
+  width: clamp(18px, 18%, 30px);
+  height: clamp(18px, 18%, 30px);
+  color: var(--scan-color);
+  filter: drop-shadow(0 0 6px var(--scan-soft));
+}
+
+.face-scan-corner-tl {
+  left: 0;
+  top: 0;
+  border-left: 5px solid currentColor;
+  border-top: 5px solid currentColor;
+  border-top-left-radius: 0.25rem;
+}
+
+.face-scan-corner-tr {
+  right: 0;
+  top: 0;
+  border-right: 5px solid currentColor;
+  border-top: 5px solid currentColor;
+  border-top-right-radius: 0.25rem;
+}
+
+.face-scan-corner-bl {
+  left: 0;
+  bottom: 0;
+  border-left: 5px solid currentColor;
+  border-bottom: 5px solid currentColor;
+  border-bottom-left-radius: 0.25rem;
+}
+
+.face-scan-corner-br {
+  right: 0;
+  bottom: 0;
+  border-right: 5px solid currentColor;
+  border-bottom: 5px solid currentColor;
+  border-bottom-right-radius: 0.25rem;
 }
 
 .face-scan-grid {
@@ -2625,6 +2676,11 @@ html.light .student-rooms textarea::placeholder {
   12% { opacity: 1; }
   88% { opacity: 1; }
   100% { top: 86%; opacity: 0; transform: translateY(8px); }
+}
+
+@keyframes faceScanFlatBeam {
+  0%, 100% { opacity: 0.72; transform: translateY(-50%) scaleX(0.92); }
+  50% { opacity: 1; transform: translateY(-50%) scaleX(1.04); }
 }
 
 @media (prefers-reduced-motion: reduce) {

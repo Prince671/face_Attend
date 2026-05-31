@@ -106,21 +106,21 @@ export default function MarkAttendance() {
     if (faceBox) {
       const faceCenterX = faceBox.x + faceBox.width / 2;
       const faceCenterY = faceBox.y + faceBox.height / 2;
-      let cropWidth = Math.max(faceBox.width * 2.35, faceBox.height * 1.35);
-      let cropHeight = cropWidth * (PASSPORT_HEIGHT / PASSPORT_WIDTH);
+      let cropWidth = Math.max(faceBox.width * 1.55, faceBox.height * 1.1);
+      let cropHeight = Math.max(faceBox.height * 1.45, cropWidth * 1.12);
 
       if (cropHeight > sourceHeight) {
         cropHeight = sourceHeight;
-        cropWidth = cropHeight * (PASSPORT_WIDTH / PASSPORT_HEIGHT);
+        cropWidth = Math.min(sourceWidth, cropHeight * 0.9);
       }
       if (cropWidth > sourceWidth) {
         cropWidth = sourceWidth;
-        cropHeight = cropWidth * (PASSPORT_HEIGHT / PASSPORT_WIDTH);
+        cropHeight = Math.min(sourceHeight, cropWidth * 1.12);
       }
 
       crop = clampCrop({
         x: faceCenterX - cropWidth / 2,
-        y: faceCenterY - cropHeight * 0.38,
+        y: faceCenterY - cropHeight * 0.42,
         width: cropWidth,
         height: cropHeight
       }, sourceWidth, sourceHeight);
@@ -315,7 +315,7 @@ export default function MarkAttendance() {
       setAutoCaptureStatus('Move your face into the camera frame');
     }
 
-    const detectionIntervalMs = detector ? 180 : 1400;
+    const detectionIntervalMs = detector ? 80 : 650;
     autoCaptureTimer.current = window.setInterval(async () => {
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || capturedImage || captureInProgress.current) return;
