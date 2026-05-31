@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 
 export default function BulkProgressOverlay({ open, title, progress = 0, message, onCancel }) {
   const pct = Math.max(0, Math.min(100, Math.round(progress || 0)));
+  const stage = pct >= 100 ? 'Completed' : pct >= 90 ? 'Processing...' : 'Uploading...';
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('app:busy', { detail: { active: Boolean(open), title } }));
@@ -28,7 +29,10 @@ export default function BulkProgressOverlay({ open, title, progress = 0, message
           >
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-xs uppercase tracking-wider text-primary-300">Please wait</p>
+                <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-primary-300">
+                  <span className="h-2 w-2 rounded-full bg-primary-300 shadow-[0_0_12px_rgba(96,165,250,0.8)] motion-safe:animate-pulse" />
+                  Please wait
+                </p>
                 <h2 className="mt-1 font-display text-xl font-semibold text-white">{title}</h2>
                 <p className="mt-2 text-sm text-slate-400">{message || `${pct}% uploaded`}</p>
               </div>
@@ -41,15 +45,17 @@ export default function BulkProgressOverlay({ open, title, progress = 0, message
 
             <div className="mt-5 h-3 overflow-hidden rounded-full border border-white/10 bg-white/5">
               <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-primary-500 to-emerald-400"
+                className="relative h-full overflow-hidden rounded-full bg-gradient-to-r from-primary-500 to-emerald-400"
                 initial={{ width: 0 }}
                 animate={{ width: `${pct}%` }}
                 transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-              />
+              >
+                <span className="absolute inset-y-0 -left-1/3 w-1/3 bg-white/35 blur-sm motion-safe:animate-[progress-shine_1.2s_ease-in-out_infinite]" />
+              </motion.div>
             </div>
             <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-              <span>{pct}% uploaded</span>
-              <span>{pct >= 100 ? 'Processing...' : 'Uploading...'}</span>
+              <span>{pct}%</span>
+              <span>{stage}</span>
             </div>
           </motion.div>
         </motion.div>

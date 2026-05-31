@@ -33,6 +33,9 @@ const {
   createPoll,
   votePoll,
   getMediaGallery,
+  getPinnedResources,
+  getActivityLog,
+  translateMessage,
   reportMessage,
   inviteInfo,
   regenerateInvite,
@@ -74,6 +77,8 @@ router.post('/groups/:groupId/messages', handleUpload(uploadChatFile.array('file
 router.post('/groups/:groupId/media', handleUpload(uploadChatFile.array('files', 10)), invalidateAfter(createMessage, ['chat-groups', 'chat-gallery']));
 router.post('/groups/:groupId/polls', invalidateAfter(createPoll, ['chat-groups']));
 router.get('/groups/:groupId/gallery', cacheMiddleware('chat-gallery', 30), getMediaGallery);
+router.get('/groups/:groupId/resources', cacheMiddleware('chat-gallery', 30), getPinnedResources);
+router.get('/groups/:groupId/activity', getActivityLog);
 router.get('/groups/:groupId/invite', inviteInfo);
 router.post('/groups/:groupId/invite/regenerate', invalidateAfter(regenerateInvite, ['chat-groups']));
 router.post('/groups/:groupId/invite/send', invalidateAfter(sendInvite, ['chat-groups', 'notifications']));
@@ -97,8 +102,9 @@ router.post('/messages/:messageId/forward', invalidateAfter(forwardMessage, ['ch
 router.post('/messages/:messageId/read', markMessageRead);
 router.get('/messages/:messageId/receipts', getMessageReceipts);
 router.delete('/messages/:messageId/schedule', cancelScheduledMessage);
-router.post('/messages/:messageId/pin', invalidateAfter(pinMessage, ['chat-groups']));
-router.post('/messages/:messageId/important', invalidateAfter(markImportant, ['chat-groups']));
+router.post('/messages/:messageId/pin', invalidateAfter(pinMessage, ['chat-groups', 'chat-gallery']));
+router.post('/messages/:messageId/important', invalidateAfter(markImportant, ['chat-groups', 'chat-gallery']));
+router.post('/messages/:messageId/translate', translateMessage);
 router.post('/messages/:messageId/vote', invalidateAfter(votePoll, ['chat-groups']));
 router.post('/messages/:messageId/report', reportMessage);
 

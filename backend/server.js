@@ -40,7 +40,7 @@ const server = http.createServer(app);
 app.set('trust proxy', Number(process.env.TRUST_PROXY || 1));
 server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000);
 server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 66000);
-server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS || 120000);
+server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS || 300000);
 
 const configuredFrontendOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
@@ -367,7 +367,7 @@ const runLmsDeadlineScheduler = () => {
 setTimeout(runLmsDeadlineScheduler, 25 * 1000);
 const lmsDeadlineInterval = setInterval(runLmsDeadlineScheduler, 60 * 1000);
 
-const mlKeepAliveInterval = startMlKeepAlive();
+const stopMlKeepAlive = startMlKeepAlive();
 
 let isShuttingDown = false;
 const gracefulShutdown = (signal) => {
@@ -380,7 +380,7 @@ const gracefulShutdown = (signal) => {
   clearInterval(pendingDeletionCleanupInterval);
   clearInterval(lectureReminderInterval);
   clearInterval(lmsDeadlineInterval);
-  if (mlKeepAliveInterval) clearInterval(mlKeepAliveInterval);
+  if (typeof stopMlKeepAlive === 'function') stopMlKeepAlive();
 
   server.close(async () => {
     try {

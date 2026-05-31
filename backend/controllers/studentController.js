@@ -4,6 +4,7 @@ const Attendance = require('../models/Attendance');
 const Subject = require('../models/Subject');
 const { enrollStudentInMatchingSubjects, studentMatchesSubject } = require('../utils/subjectEnrollment');
 const { isProfileRestricted, isRestrictedForSubject, restrictedSubjectErrorMessage } = require('../utils/restrictionPolicy');
+const { studentIdentityFilter } = require('../utils/studentIdentity');
 
 const visibleLectureFilter = {
   source: { $ne: 'imported' },
@@ -57,6 +58,7 @@ const getDashboard = async (req, res) => {
       .filter(Boolean)
       .filter(subject => !isRestrictedForSubject(student, subject._id));
     const subjectIds = student.enrolledSubjects.map(s => s._id);
+    const studentRecordFilter = studentIdentityFilter(student);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -68,7 +70,7 @@ const getDashboard = async (req, res) => {
       openLectures,
       upcomingLectures
     ] = await Promise.all([
-      Attendance.find({ student: req.user._id, status: 'present' })
+      Attendance.find({ ...studentRecordFilter, status: 'present' })
         .populate({ path: 'lecture', select: 'title date startTime source' })
         .populate('subject', 'name code branch')
         .sort({ markedAt: -1 })
@@ -81,7 +83,7 @@ const getDashboard = async (req, res) => {
       Attendance.aggregate([
         {
           $match: {
-            student: req.user._id,
+            ...studentRecordFilter,
             subject: { $in: subjectIds },
             status: 'present'
           }

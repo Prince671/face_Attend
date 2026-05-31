@@ -12,6 +12,7 @@ import { buildAcademicOptions, findAcademicBranch, subjectMatchesAcademicBranch 
 import AppConfirmModal from '../../components/AppConfirmModal';
 import BulkProgressOverlay from '../../components/BulkProgressOverlay';
 import { handleDeleteScheduled } from '../../utils/deleteUndo';
+import { useSmoothBulkProgress } from '../../utils/smoothBulkProgress';
 
 const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const CSE_BRANCHES = ['Computer Science', 'Diploma CS'];
@@ -64,7 +65,14 @@ export default function AdminTeachers() {
   const [showTeacherList, setShowTeacherList] = useState(false);
   const [dragSubjectId, setDragSubjectId] = useState('');
   const [deleteTeacherTarget, setDeleteTeacherTarget] = useState(null);
-  const [bulkProgress, setBulkProgress] = useState(null);
+  const {
+    bulkProgress,
+    startBulkProgress,
+    markBulkUploadProgress,
+    markBulkProcessing,
+    completeBulkProgress,
+    clearBulkProgress
+  } = useSmoothBulkProgress();
 
   const canShowAllocation = selectedDepartment && selectedBranch && selectedSemester;
 
@@ -182,7 +190,7 @@ export default function AdminTeachers() {
     if (!csvFile) return toast.error('Choose a CSV file first');
     setSaving(true);
     const controller = new AbortController();
-    setBulkProgress({ title: 'Importing Teachers', progress: 0, controller });
+    startBulkProgress({ title: 'Importing Teachers', controller, message: 'Preparing spreadsheet upload...' });
     try {
       const form = new FormData();
       form.append('file', csvFile);
@@ -190,19 +198,25 @@ export default function AdminTeachers() {
       const res = await adminAPI.importTeachers(form, {
         signal: controller.signal,
         onUploadProgress: event => {
-          if (!event.total) return;
-          setBulkProgress(current => current ? { ...current, progress: Math.round((event.loaded * 100) / event.total) } : current);
+          markBulkUploadProgress(event);
+          if (event.total && event.loaded >= event.total) markBulkProcessing('Upload complete. Creating teacher accounts safely...');
         }
       });
+      completeBulkProgress('Teacher import completed.');
       toast.success(`Imported ${res.data.imported} teacher${res.data.imported === 1 ? '' : 's'}`);
-      if (res.data.failed) toast.error(`${res.data.failed} row${res.data.failed === 1 ? '' : 's'} failed`);
+      if (res.data.failed) toast(`${res.data.failed} row${res.data.failed === 1 ? '' : 's'} failed`);
       setCsvFile(null);
       await load();
     } catch (err) {
-      toast.error(err.code === 'ERR_CANCELED' ? 'Teacher import canceled before upload completed' : (err.response?.data?.message || 'Could not import CSV'));
+      const timedOut = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
+      toast.error(err.code === 'ERR_CANCELED'
+        ? 'Teacher import canceled before upload completed'
+        : timedOut
+          ? 'Teacher import is taking longer than expected. Please refresh the list before retrying.'
+          : (err.response?.data?.message || 'Could not import CSV'));
     } finally {
       setSaving(false);
-      setBulkProgress(null);
+      clearBulkProgress();
     }
   };
 
@@ -420,7 +434,9 @@ export default function AdminTeachers() {
         open={Boolean(bulkProgress)}
         title={bulkProgress?.title}
         progress={bulkProgress?.progress}
-        message={bulkProgress?.progress >= 100 ? 'Upload complete. Saving teacher accounts safely...' : `${bulkProgress?.progress || 0}% uploaded`}
+        message={bulkProgress?.message || (bulkProgress?.phase === 'processing'
+          ? 'Processing teacher accounts safely...'
+          : `${bulkProgress?.progress || 0}% uploaded`)}
         onCancel={bulkProgress?.controller ? () => bulkProgress.controller.abort() : undefined}
       />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

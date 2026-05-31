@@ -75,7 +75,7 @@ const timetableFilter = (req, file, cb) => {
 const uploadTimetable = multer({
   storage: timetableStorage,
   fileFilter: timetableFilter,
-  limits: { fileSize: 12 * 1024 * 1024 }
+  limits: { fileSize: Number(process.env.TIMETABLE_UPLOAD_LIMIT_MB || 25) * 1024 * 1024 }
 });
 
 const spreadsheetFilter = (req, file, cb) => {
@@ -98,7 +98,7 @@ const spreadsheetFilter = (req, file, cb) => {
 const uploadSpreadsheet = multer({
   storage: spreadsheetStorage,
   fileFilter: spreadsheetFilter,
-  limits: { fileSize: 8 * 1024 * 1024 }
+  limits: { fileSize: Number(process.env.SPREADSHEET_UPLOAD_LIMIT_MB || 25) * 1024 * 1024 }
 });
 
 const lmsFileFilter = (req, file, cb) => {

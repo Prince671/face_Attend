@@ -4,6 +4,7 @@ const attendanceSchema = new mongoose.Schema({
   lecture: { type: mongoose.Schema.Types.ObjectId, ref: 'Lecture', required: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  studentId: { type: String, trim: true, uppercase: true, index: true },
   status: { type: String, enum: ['present', 'absent', 'late', 'excused'], default: 'present' },
   markedAt: { type: Date, default: Date.now },
   faceVerified: { type: Boolean, default: false },
@@ -28,7 +29,9 @@ const attendanceSchema = new mongoose.Schema({
 
 // Unique: one attendance per student per lecture
 attendanceSchema.index({ lecture: 1, student: 1 }, { unique: true });
+attendanceSchema.index({ lecture: 1, studentId: 1 }, { unique: true, sparse: true });
 attendanceSchema.index({ subject: 1, student: 1, markedAt: -1 });
+attendanceSchema.index({ subject: 1, studentId: 1, markedAt: -1 });
 attendanceSchema.index({ lecture: 1, status: 1 });
 attendanceSchema.index({ student: 1, markedAt: -1 });
 attendanceSchema.index({ subject: 1, status: 1 });

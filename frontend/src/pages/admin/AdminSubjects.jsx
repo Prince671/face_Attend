@@ -14,6 +14,7 @@ import BulkProgressOverlay from '../../components/BulkProgressOverlay';
 import { handleDeleteScheduled } from '../../utils/deleteUndo';
 import { buildAcademicOptions, findAcademicBranch, subjectMatchesAcademicBranch } from '../../utils/academicStructure';
 import { hydrateLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
+import { useSmoothBulkProgress } from '../../utils/smoothBulkProgress';
 
 const DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const CSE_BRANCHES = ['Computer Science', 'Diploma CS'];
@@ -70,7 +71,14 @@ export default function AdminSubjects() {
   const [attendanceImporting, setAttendanceImporting] = useState(false);
   const [attendanceDeleteRange, setAttendanceDeleteRange] = useState({ startDate: '', endDate: '' });
   const [attendanceDeleting, setAttendanceDeleting] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState(null);
+  const {
+    bulkProgress,
+    startBulkProgress,
+    markBulkUploadProgress,
+    markBulkProcessing,
+    completeBulkProgress,
+    clearBulkProgress
+  } = useSmoothBulkProgress();
   const [lmsActivity, setLmsActivity] = useState(() => readLmsActivity(user?._id));
   const academicOptions = buildAcademicOptions(academicStructures, subjects);
   const selectedAcademicBranch = isSuperAdmin ? findAcademicBranch(academicOptions, selectedCourse, selectedBranch) : null;
@@ -181,16 +189,16 @@ export default function AdminSubjects() {
     formData.append('file', attendanceImportFile);
     setAttendanceImporting(true);
     const controller = new AbortController();
-    setBulkProgress({ title: 'Importing Attendance', progress: 0, controller });
+    startBulkProgress({ title: 'Importing Attendance', controller, message: 'Preparing attendance spreadsheet...' });
     try {
       const res = await attendanceAPI.importSubjectAttendance(attendanceImportSubject._id, formData, {
         signal: controller.signal,
         onUploadProgress: event => {
-          if (!event.total) return;
-          setBulkProgress(current => current ? { ...current, progress: Math.min(92, Math.round((event.loaded * 92) / event.total)) } : current);
+          markBulkUploadProgress(event);
+          if (event.total && event.loaded >= event.total) markBulkProcessing('Upload complete. Processing attendance records...');
         }
       });
-      setBulkProgress(current => current ? { ...current, progress: 100 } : current);
+      completeBulkProgress('Attendance import completed.');
       const summary = res.data.importSummary;
       toast.success(`Imported ${summary?.imported || 0} records across ${summary?.lectures || 0} date${summary?.lectures === 1 ? '' : 's'}`);
       if (summary?.skipped) {
@@ -204,10 +212,15 @@ export default function AdminSubjects() {
       closeAttendanceImport();
       fetchSubjects();
     } catch (error) {
-      toast.error(error.code === 'ERR_CANCELED' ? 'Attendance import canceled before upload completed' : (error.response?.data?.message || 'Attendance import failed'));
+      const timedOut = error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''));
+      toast.error(error.code === 'ERR_CANCELED'
+        ? 'Attendance import canceled before upload completed'
+        : timedOut
+          ? 'Attendance import is taking longer than expected. Please refresh attendance before retrying.'
+          : (error.response?.data?.message || 'Attendance import failed'));
     } finally {
       setAttendanceImporting(false);
-      window.setTimeout(() => setBulkProgress(null), 350);
+      clearBulkProgress();
     }
   };
 
@@ -543,11 +556,9 @@ export default function AdminSubjects() {
         open={Boolean(bulkProgress)}
         title={bulkProgress?.title}
         progress={bulkProgress?.progress}
-        message={bulkProgress?.progress >= 100
-          ? 'Upload complete. Saving attendance safely...'
-          : bulkProgress?.progress >= 90
-            ? `${bulkProgress?.progress || 0}% uploaded. Processing attendance safely...`
-            : `${bulkProgress?.progress || 0}% uploaded`}
+        message={bulkProgress?.message || (bulkProgress?.phase === 'processing'
+          ? 'Processing attendance safely...'
+          : `${bulkProgress?.progress || 0}% uploaded`)}
         onCancel={bulkProgress?.controller ? () => bulkProgress.controller.abort() : undefined}
       />
       {attendanceImportSubject && typeof document !== 'undefined' && createPortal(

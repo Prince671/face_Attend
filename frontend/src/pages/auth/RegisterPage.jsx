@@ -8,6 +8,7 @@ import { authAPI } from '../../services/api';
 import ThemeToggle from '../../components/ThemeToggle';
 import { AuthButtonSkeleton, SkeletonLine } from '../../components/LoadingStates';
 import { getPasswordIssues, passwordRules } from '../../utils/passwordPolicy';
+import DynamicFaceGuide from '../../components/DynamicFaceGuide';
 
 const COURSE_OPTIONS = {
   'B. Tech': ['Computer Science', 'Mechanical Engineering', 'Electrical Engineering', 'AI/ML Engineering'],
@@ -77,6 +78,7 @@ export default function RegisterPage() {
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [autoCaptureStatus, setAutoCaptureStatus] = useState('Open camera and center your face');
+  const [detectedFaceBox, setDetectedFaceBox] = useState(null);
   const [autoCaptureReady, setAutoCaptureReady] = useState(false);
   const [autoCaptureAvailable, setAutoCaptureAvailable] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -311,6 +313,7 @@ export default function RegisterPage() {
     setCameraReady(false);
     setAutoCaptureReady(false);
     setAutoCaptureStatus('Center your face in the guide');
+    setDetectedFaceBox(null);
     autoCaptureFrames.current = 0;
     setCameraOpen(true);
   };
@@ -322,6 +325,7 @@ export default function RegisterPage() {
     setAutoCaptureReady(false);
     autoCaptureFrames.current = 0;
     lastFaceBox.current = null;
+    setDetectedFaceBox(null);
     if (autoCaptureTimer.current) window.clearInterval(autoCaptureTimer.current);
     autoCaptureTimer.current = null;
   }, []);
@@ -365,7 +369,7 @@ export default function RegisterPage() {
       const formData = new FormData();
       formData.append('guideFrame', file);
       const response = await authAPI.detectRegistrationFace(formData);
-      return response.data || { ready: false, message: 'Move your face into the oval' };
+      return response.data || { ready: false, message: 'Move your face into the camera frame' };
     } catch (err) {
       if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
         mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
@@ -401,7 +405,7 @@ export default function RegisterPage() {
     const detector = FaceDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
     setAutoCaptureAvailable(true);
     if (!detector) {
-      setAutoCaptureStatus('Move your face into the oval');
+      setAutoCaptureStatus('Move your face into the camera frame');
     }
 
     const detectionIntervalMs = detector ? 180 : 1400;
@@ -415,13 +419,13 @@ export default function RegisterPage() {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus(probe.message || 'Move your face into the oval');
+          setAutoCaptureStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
 
         autoCaptureFrames.current += 1;
         setAutoCaptureReady(true);
-        setAutoCaptureStatus('Face detected inside the oval. Hold still...');
+        setAutoCaptureStatus('Face detected. Hold still...');
 
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
@@ -436,12 +440,14 @@ export default function RegisterPage() {
         if (faces.length !== 1) {
           autoCaptureFrames.current = 0;
           lastFaceBox.current = null;
+          setDetectedFaceBox(null);
           setAutoCaptureReady(false);
           setAutoCaptureStatus(faces.length > 1 ? 'Only one face should be visible' : 'Move your face into the guide');
           return;
         }
 
         lastFaceBox.current = faces[0].boundingBox;
+        setDetectedFaceBox(faces[0].boundingBox);
         const { ready, centered, sizeOk } = isFaceInsideGuide(faces[0].boundingBox, video);
         if (!centered) {
           autoCaptureFrames.current = 0;
@@ -471,13 +477,13 @@ export default function RegisterPage() {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus(probe.message || 'Move your face into the oval');
+          setAutoCaptureStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
 
         autoCaptureFrames.current += 1;
         setAutoCaptureReady(true);
-        setAutoCaptureStatus('Face detected inside the oval. Hold still...');
+        setAutoCaptureStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
@@ -501,11 +507,10 @@ export default function RegisterPage() {
     if (form.phone && getIndianMobileDigits(form.phone).length !== 10) { toast.error('Enter a valid 10 digit phone number.'); return; }
 
     setLoading(true);
-    const formData = new FormData();
-    Object.entries(form).forEach(([k, v]) => { if (k !== 'confirmPassword') formData.append(k, v); });
-    formData.append('profileImage', photo);
-
     try {
+      const formData = new FormData();
+      Object.entries(form).forEach(([k, v]) => { if (k !== 'confirmPassword') formData.append(k, v); });
+      formData.append('profileImage', photo);
       await authAPI.register(formData);
       setStep(3);
     } catch (err) {
@@ -783,13 +788,7 @@ export default function RegisterPage() {
                         className="h-full w-full object-cover"
                       />
                       {cameraReady && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className={`h-[72%] aspect-[3/4] rounded-[48%] border-2 transition-all ${
-                            autoCaptureReady
-                              ? 'border-emerald-400 shadow-[0_0_28px_rgba(16,185,129,0.35)]'
-                              : 'border-primary-400/70'
-                          }`} />
-                        </div>
+                        <DynamicFaceGuide box={detectedFaceBox} videoRef={webcamRef} ready={autoCaptureReady} mirrored />
                       )}
                       {!cameraReady && !cameraError && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/60">

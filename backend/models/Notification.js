@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
   recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  recipientStudentId: { type: String, trim: true, uppercase: true, index: true },
   recipientRole: { type: String, enum: ['admin', 'student', 'teacher', 'all'] },
   type: {
     type: String,

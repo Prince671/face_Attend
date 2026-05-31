@@ -13,7 +13,9 @@ import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { LoadingOverlay, PageSkeleton, CardSkeleton, SkeletonLine } from '../../components/LoadingStates';
 import AppConfirmModal from '../../components/AppConfirmModal';
+import BulkProgressOverlay from '../../components/BulkProgressOverlay';
 import { clearLmsActivity, hydrateLmsActivity, lmsActivityBucketForType, lmsActivityEventName, markLmsActivity, readLmsActivity } from '../../utils/lmsActivity';
+import { useSmoothBulkProgress } from '../../utils/smoothBulkProgress';
 
 const emptyMaterial = { title: '', description: '', linkUrl: '', linkUrls: '', tags: '', folder: '', topic: '', category: 'notes', isPinned: false, files: [] };
 const emptyAssignment = {
@@ -329,6 +331,14 @@ export default function SubjectClassroom() {
   const [attendanceHistoryOpen, setAttendanceHistoryOpen] = useState(true);
   const [attendanceImportFile, setAttendanceImportFile] = useState(null);
   const [attendanceImporting, setAttendanceImporting] = useState(false);
+  const {
+    bulkProgress,
+    startBulkProgress,
+    markBulkUploadProgress,
+    markBulkProcessing,
+    completeBulkProgress,
+    clearBulkProgress
+  } = useSmoothBulkProgress();
   const [attendanceDeleteRange, setAttendanceDeleteRange] = useState({ startDate: '', endDate: '' });
   const [attendanceDeleting, setAttendanceDeleting] = useState(false);
   const [historyRange, setHistoryRange] = useState({ startDate: '', endDate: '' });
@@ -505,10 +515,14 @@ export default function SubjectClassroom() {
       }
     };
     socket.on('lms_changed', refresh);
+    socket.on('attendance_updated', refresh);
+    socket.on('lectures_changed', refresh);
     socket.on('attendance_closed', refresh);
     socket.on('attendance_opened', refresh);
     return () => {
       socket.off('lms_changed', refresh);
+      socket.off('attendance_updated', refresh);
+      socket.off('lectures_changed', refresh);
       socket.off('attendance_closed', refresh);
       socket.off('attendance_opened', refresh);
     };
@@ -838,8 +852,17 @@ export default function SubjectClassroom() {
     const formData = new FormData();
     formData.append('file', attendanceImportFile);
     setAttendanceImporting(true);
+    const controller = new AbortController();
+    startBulkProgress({ title: 'Importing Attendance', controller, message: 'Preparing attendance spreadsheet...' });
     try {
-      const res = await attendanceAPI.importSubjectAttendance(subjectId, formData);
+      const res = await attendanceAPI.importSubjectAttendance(subjectId, formData, {
+        signal: controller.signal,
+        onUploadProgress: event => {
+          markBulkUploadProgress(event);
+          if (event.total && event.loaded >= event.total) markBulkProcessing('Upload complete. Processing attendance records...');
+        }
+      });
+      completeBulkProgress('Attendance import completed.');
       const summary = res.data.importSummary;
       toast.success(`Imported ${summary?.imported || 0} records across ${summary?.lectures || 0} date${summary?.lectures === 1 ? '' : 's'}`);
       if (summary?.skipped) toast(`${summary.skipped} rows skipped.`);
@@ -849,9 +872,15 @@ export default function SubjectClassroom() {
       await loadClassroom();
       if (historyData) fetchSubjectHistory();
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Attendance import failed');
+      const timedOut = error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''));
+      toast.error(error.code === 'ERR_CANCELED'
+        ? 'Attendance import canceled before upload completed'
+        : timedOut
+          ? 'Attendance import is taking longer than expected. Please refresh attendance before retrying.'
+          : (error.response?.data?.message || 'Attendance import failed'));
     } finally {
       setAttendanceImporting(false);
+      clearBulkProgress();
     }
   };
 
@@ -2818,6 +2847,15 @@ export default function SubjectClassroom() {
           </div>
         )}
       </CreationModal>
+      <BulkProgressOverlay
+        open={Boolean(bulkProgress)}
+        title={bulkProgress?.title}
+        progress={bulkProgress?.progress}
+        message={bulkProgress?.message || (bulkProgress?.phase === 'processing'
+          ? 'Processing attendance safely...'
+          : `${bulkProgress?.progress || 0}% uploaded`)}
+        onCancel={bulkProgress?.controller ? () => bulkProgress.controller.abort() : undefined}
+      />
     </div>
   );
 }

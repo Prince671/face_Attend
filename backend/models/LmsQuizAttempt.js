@@ -4,6 +4,7 @@ const lmsQuizAttemptSchema = new mongoose.Schema({
   quiz: { type: mongoose.Schema.Types.ObjectId, ref: 'LmsQuiz', required: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  studentId: { type: String, trim: true, uppercase: true, index: true },
   answers: [{
     question: { type: mongoose.Schema.Types.ObjectId },
     selectedIndex: { type: Number, default: -1 },
@@ -29,5 +30,6 @@ const lmsQuizAttemptSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 lmsQuizAttemptSchema.index({ quiz: 1, student: 1 }, { unique: true });
+lmsQuizAttemptSchema.index({ quiz: 1, studentId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('LmsQuizAttempt', lmsQuizAttemptSchema);

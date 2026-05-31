@@ -16,6 +16,7 @@ const { SYSTEM_ADMIN_DEPARTMENT, adminDepartmentRoom, assertDepartmentAccess, ge
 const { logAudit } = require('../utils/auditLogger');
 const { studentMatchesSubject } = require('../utils/subjectEnrollment');
 const { schedulePendingDeletion } = require('../utils/pendingDeletion');
+const { studentCodeOf, studentIdentityFilter } = require('../utils/studentIdentity');
 
 const attendanceFailure = (res, message, extra = {}) => {
   return res.json({ success: false, message, ...extra });
@@ -311,7 +312,8 @@ const findOrCreateImportStudent = async ({ row, subject, req, warnings, cache })
   const email = rowStudentEmail(row);
   const studentId = email && rawIdentifier.toLowerCase() === email ? '' : rawIdentifier;
   const cacheKey = String(studentId || email || rawIdentifier).trim().toLowerCase();
-  if (cacheKey && cache?.has(cacheKey)) return cache.get(cacheKey);
+  const cachedStudent = cacheKey && cache?.has(cacheKey) ? cache.get(cacheKey) : null;
+  if (cachedStudent && !cachedStudent.__prefetchedForImport) return cachedStudent;
   const query = {
     role: 'student',
     pendingDeletion: { $ne: true },
@@ -320,8 +322,9 @@ const findOrCreateImportStudent = async ({ row, subject, req, warnings, cache })
   if (studentId) query.$or.push({ studentId: new RegExp(`^${studentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
   if (email) query.$or.push({ email });
 
-  let student = query.$or.length ? await User.findOne(query).select('name email studentId department branch semester enrolledSubjects status isRestricted restrictionReason subjectRestrictions') : null;
+  let student = cachedStudent || (query.$or.length ? await User.findOne(query).select('name email studentId department branch semester enrolledSubjects status isRestricted restrictionReason subjectRestrictions') : null);
   if (student) {
+    delete student.__prefetchedForImport;
     const warningParts = [];
     if (!studentMatchesSubject(student, subject)) warningParts.push('student academic details do not match this subject');
     if (!(student.enrolledSubjects || []).some(id => String(id) === String(subject._id))) warningParts.push('student was not enrolled in this subject');
@@ -621,6 +624,15 @@ const emitDirectNotification = (req, userId, notification) => {
   });
 };
 
+const safeImportSideEffect = async (label, task) => {
+  try {
+    return await task();
+  } catch (error) {
+    console.warn(`${label} failed after import save:`, error.message);
+    return null;
+  }
+};
+
 // @desc  Mark attendance via face recognition + OTP
 const markAttendance = async (req, res) => {
   const faceFile = req.file || req.files?.faceCapture?.[0] || null;
@@ -631,6 +643,7 @@ const markAttendance = async (req, res) => {
     await closeExpiredAttendance(req.app.get('io'));
     const { lectureId, attendanceCode } = req.body;
     const studentId = req.user._id;
+    const studentRecordFilter = studentIdentityFilter(req.user);
 
     if (!faceFile) {
       return attendanceFailure(res, 'Face capture image is required.');
@@ -666,7 +679,7 @@ const markAttendance = async (req, res) => {
       return attendanceFailure(res, 'Attendance code has expired.');
     }
 
-    const existing = await Attendance.findOne({ lecture: lectureId, student: studentId });
+    const existing = await Attendance.findOne({ lecture: lectureId, ...studentRecordFilter });
     if (existing) {
       cleanupFiles(uploadedPaths);
       return attendanceFailure(res, 'Attendance already marked for this lecture.');
@@ -802,6 +815,7 @@ const markAttendance = async (req, res) => {
       lecture: lectureId,
       subject: lecture.subject._id,
       student: studentId,
+      studentId: studentCodeOf(student),
       status: 'present',
       faceVerified: true,
       faceConfidence: verificationResult.confidence,
@@ -877,7 +891,7 @@ const getStudentSubjectAttendance = async (req, res) => {
     const lectureIds = lectures.map(lec => lec._id);
 
     const attendanceRecords = await Attendance.find({
-      student: studentId,
+      ...studentIdentityFilter(req.user),
       subject: subjectId,
       lecture: { $in: lectureIds },
       status: 'present'
@@ -889,7 +903,7 @@ const getStudentSubjectAttendance = async (req, res) => {
     });
 
     const disputes = await AttendanceDispute.find({
-      student: studentId,
+      ...studentIdentityFilter(req.user),
       subject: subjectId,
       lecture: { $in: lectureIds }
     }).lean();
@@ -938,7 +952,7 @@ const createAttendanceDispute = async (req, res) => {
 
     const presentLectureIds = await Attendance.distinct('lecture', {
       lecture: { $in: lectures.map(lecture => lecture._id) },
-      student: req.user._id,
+      ...studentIdentityFilter(req.user),
       status: 'present'
     });
     const presentSet = new Set(presentLectureIds.map(String));
@@ -950,12 +964,13 @@ const createAttendanceDispute = async (req, res) => {
     const disputes = [];
     for (const lecture of disputedLectures) {
       const dispute = await AttendanceDispute.findOneAndUpdate(
-        { lecture: lecture._id, student: req.user._id },
+        { lecture: lecture._id, ...studentIdentityFilter(req.user) },
         {
           $setOnInsert: {
             lecture: lecture._id,
             subject: lecture.subject._id,
             student: req.user._id,
+            studentId: studentCodeOf(req.user),
           },
           $set: {
             reason: String(reason).trim(),
@@ -1058,12 +1073,13 @@ const resolveAttendanceDispute = async (req, res) => {
     const nextAttendanceStatus = attendanceStatus || (status === 'approved' ? 'present' : null);
     if (nextAttendanceStatus) {
       await Attendance.findOneAndUpdate(
-        { lecture: dispute.lecture._id, student: dispute.student._id },
+        { lecture: dispute.lecture._id, ...studentIdentityFilter(dispute.student) },
         {
           $set: {
             lecture: dispute.lecture._id,
             subject: dispute.subject._id,
             student: dispute.student._id,
+            studentId: studentCodeOf(dispute.student),
             status: nextAttendanceStatus,
             markedAt: new Date(),
             faceVerified: false,
@@ -1079,6 +1095,7 @@ const resolveAttendanceDispute = async (req, res) => {
     const attendanceText = nextAttendanceStatus ? ` Attendance is marked ${nextAttendanceStatus}.` : '';
     const notification = await Notification.create({
       recipient: dispute.student._id,
+      recipientStudentId: studentCodeOf(dispute.student),
       recipientRole: 'student',
       type: 'attendance_dispute_resolved',
       title: `Attendance request ${status}`,
@@ -1157,7 +1174,7 @@ const downloadAttendanceExcel = async (req, res) => {
     const lectures = await Lecture.find({ subject: subjectId, status: 'completed' }).sort({ date: 1, startTime: 1, createdAt: 1 });
     const lectureIds = lectures.map(lec => lec._id);
     const attendanceRecords = await Attendance.find({
-      student: req.user._id,
+      ...studentIdentityFilter(student),
       subject: subjectId,
       lecture: { $in: lectureIds },
       status: 'present'
@@ -1284,12 +1301,13 @@ const updateLectureAttendanceStatus = async (req, res) => {
     if (status === 'present') {
       await Promise.all(students.map(student => (
         Attendance.findOneAndUpdate(
-          { lecture: lecture._id, student: student._id },
+          { lecture: lecture._id, ...studentIdentityFilter(student) },
           {
             $set: {
               lecture: lecture._id,
               subject: lecture.subject._id,
               student: student._id,
+              studentId: studentCodeOf(student),
               status: 'present',
               markedAt: new Date(),
               faceVerified: false,
@@ -1307,7 +1325,13 @@ const updateLectureAttendanceStatus = async (req, res) => {
         )
       )));
     } else {
-      const existingRecords = await Attendance.find({ lecture: lecture._id, student: { $in: students.map(student => student._id) } }).select('capturedImagePublicId');
+      const existingRecords = await Attendance.find({
+        lecture: lecture._id,
+        $or: [
+          { student: { $in: students.map(student => student._id) } },
+          { studentId: { $in: students.map(student => studentCodeOf(student)).filter(Boolean) } }
+        ]
+      }).select('capturedImagePublicId');
       await Promise.all(existingRecords
         .filter(record => record.capturedImagePublicId)
         .map(async record => {
@@ -1315,12 +1339,13 @@ const updateLectureAttendanceStatus = async (req, res) => {
         }));
       await Promise.all(students.map(student => (
         Attendance.findOneAndUpdate(
-          { lecture: lecture._id, student: student._id },
+          { lecture: lecture._id, ...studentIdentityFilter(student) },
           {
             $set: {
               lecture: lecture._id,
               subject: lecture.subject._id,
               student: student._id,
+              studentId: studentCodeOf(student),
               status: 'absent',
               markedAt: new Date(),
               faceVerified: false,
@@ -1414,6 +1439,36 @@ const importSubjectAttendance = async (req, res) => {
     };
     const rowsByDate = new Map();
     const importStudentCache = new Map();
+    const candidateStudentIds = new Set();
+    const candidateEmails = new Set();
+
+    rows.forEach((row) => {
+      const identifier = rowStudentIdentifier(row);
+      const email = rowStudentEmail(row);
+      if (identifier && identifier.toLowerCase() !== email) {
+        candidateStudentIds.add(identifier);
+        candidateStudentIds.add(identifier.toUpperCase());
+      }
+      if (email) candidateEmails.add(email);
+    });
+
+    if (candidateStudentIds.size || candidateEmails.size) {
+      const studentQuery = {
+        role: 'student',
+        pendingDeletion: { $ne: true },
+        $or: []
+      };
+      if (candidateStudentIds.size) studentQuery.$or.push({ studentId: { $in: [...candidateStudentIds] } });
+      if (candidateEmails.size) studentQuery.$or.push({ email: { $in: [...candidateEmails] } });
+      const knownStudents = await User.find(studentQuery)
+        .select('name email studentId department branch semester enrolledSubjects status isRestricted restrictionReason subjectRestrictions')
+        .lean();
+      knownStudents.forEach((student) => {
+        student.__prefetchedForImport = true;
+        if (student.studentId) importStudentCache.set(String(student.studentId).trim().toLowerCase(), student);
+        if (student.email) importStudentCache.set(String(student.email).trim().toLowerCase(), student);
+      });
+    }
 
     for (const row of rows) {
       const importDate = parseImportDate(getRowValue(row, dateAliases)) || fallbackImportDate;
@@ -1429,6 +1484,7 @@ const importSubjectAttendance = async (req, res) => {
     }
 
     const touchedLectures = [];
+    const touchedStudentIds = new Set();
 
     for (const [, group] of rowsByDate) {
       const { dayStart, rows: dateRows } = group;
@@ -1462,6 +1518,7 @@ const importSubjectAttendance = async (req, res) => {
         }
 
         seenStudents.add(String(student._id));
+        touchedStudentIds.add(String(student._id));
         validMarks.push({ student, status });
       }
 
@@ -1474,12 +1531,13 @@ const importSubjectAttendance = async (req, res) => {
 
       const operations = validMarks.map(({ student, status }) => ({
         updateOne: {
-          filter: { lecture: lecture._id, student: student._id },
+          filter: { lecture: lecture._id, ...studentIdentityFilter(student) },
           update: {
             $set: {
               lecture: lecture._id,
               subject: subject._id,
               student: student._id,
+              studentId: studentCodeOf(student),
               status,
               markedAt: dayStart,
               faceVerified: false,
@@ -1512,7 +1570,7 @@ const importSubjectAttendance = async (req, res) => {
       }
     }
 
-    await logAudit(req, {
+    await safeImportSideEffect('Attendance import audit log', () => logAudit(req, {
       action: 'attendance.imported',
       entityType: 'subject',
       entityId: subject._id,
@@ -1524,14 +1582,17 @@ const importSubjectAttendance = async (req, res) => {
         imported: results.imported,
         skipped: results.skipped
       }
-    });
+    }));
 
     const latestLecture = touchedLectures[touchedLectures.length - 1];
     const payload = latestLecture
-      ? await buildLectureAttendancePayload(await latestLecture.populate('subject', 'name code department branch semester assignedTeachers'))
+      ? (await safeImportSideEffect('Attendance import payload build', async () => (
+          buildLectureAttendancePayload(await latestLecture.populate('subject', 'name code department branch semester assignedTeachers'))
+        ))) || { stats: null, lecture: null }
       : { stats: null, lecture: null };
     const io = req.app.get('io');
-    if (io) {
+    await safeImportSideEffect('Attendance import socket emit', async () => {
+      if (!io) return;
       const updatePayload = {
         lectureId: latestLecture?._id,
         lectureIds: touchedLectures.map(item => item._id),
@@ -1545,7 +1606,13 @@ const importSubjectAttendance = async (req, res) => {
       io.to(adminDepartmentRoom(subject.department)).emit('attendance_updated', updatePayload);
       io.to('admin_room').emit('lectures_changed', updatePayload);
       io.to(adminDepartmentRoom(subject.department)).emit('lectures_changed', updatePayload);
-    }
+      touchedStudentIds.forEach(studentId => {
+        io.to(`student_${studentId}`).emit('attendance_updated', updatePayload);
+        io.to(`user_${studentId}`).emit('attendance_updated', updatePayload);
+        io.to(`student_${studentId}`).emit('lectures_changed', updatePayload);
+        io.to(`user_${studentId}`).emit('lectures_changed', updatePayload);
+      });
+    });
 
     res.json({
       success: true,
@@ -1916,19 +1983,27 @@ const getSubjectAttendanceHistory = async (req, res) => {
 
     const lectureIds = lectures.map(lecture => lecture._id);
     const studentIds = students.map(student => student._id);
-    const records = lectureIds.length && studentIds.length
+    const studentCodes = students.map(student => studentCodeOf(student)).filter(Boolean);
+    const records = lectureIds.length && students.length
       ? await Attendance.find({
         subject: subjectId,
         lecture: { $in: lectureIds },
-        student: { $in: studentIds },
+        $or: [
+          { student: { $in: studentIds } },
+          { studentId: { $in: studentCodes } }
+        ],
         status: 'present'
-      }).select('student lecture markedAt faceConfidence status')
+      }).select('student studentId lecture markedAt faceConfidence status')
       : [];
 
-    const recordMap = new Map(records.map(record => [`${record.student}:${record.lecture}`, record]));
+    const recordMap = new Map();
+    records.forEach(record => {
+      recordMap.set(`${record.student}:${record.lecture}`, record);
+      if (record.studentId) recordMap.set(`${String(record.studentId).toUpperCase()}:${record.lecture}`, record);
+    });
     const studentRows = students.map(student => {
       const lectureRecords = lectures.map(lecture => {
-        const record = recordMap.get(`${student._id}:${lecture._id}`);
+        const record = recordMap.get(`${student._id}:${lecture._id}`) || recordMap.get(`${studentCodeOf(student)}:${lecture._id}`);
         return {
           lectureId: lecture._id,
           title: lecture.title,
@@ -1952,7 +2027,7 @@ const getSubjectAttendanceHistory = async (req, res) => {
     });
 
     const lectureSummaries = lectures.map(lecture => {
-      const present = students.filter(student => recordMap.has(`${student._id}:${lecture._id}`)).length;
+      const present = students.filter(student => recordMap.has(`${student._id}:${lecture._id}`) || recordMap.has(`${studentCodeOf(student)}:${lecture._id}`)).length;
       const total = students.length;
       return {
         lecture,

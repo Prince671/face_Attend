@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const attendanceDisputeSchema = new mongoose.Schema({
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  studentId: { type: String, trim: true, uppercase: true, index: true },
   subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
   lecture: { type: mongoose.Schema.Types.ObjectId, ref: 'Lecture', required: true },
   reason: { type: String, required: true, trim: true, maxlength: 500 },
@@ -12,6 +13,7 @@ const attendanceDisputeSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 attendanceDisputeSchema.index({ student: 1, lecture: 1 }, { unique: true });
+attendanceDisputeSchema.index({ studentId: 1, lecture: 1 }, { unique: true, sparse: true });
 attendanceDisputeSchema.index({ subject: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('AttendanceDispute', attendanceDisputeSchema);

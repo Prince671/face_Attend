@@ -7,6 +7,7 @@ const User = require('../models/User');
 const { isSystemAdmin } = require('../utils/adminScope');
 const { studentMatchesSubject, studentMatchForSubject } = require('../utils/subjectEnrollment');
 const { canReceiveSubjectUpdates, isProfileRestricted } = require('../utils/restrictionPolicy');
+const { studentCodeOf } = require('../utils/studentIdentity');
 
 const AUTO_DELETE_MS = 24 * 60 * 60 * 1000;
 
@@ -22,6 +23,9 @@ const notificationScope = (user) => {
     { recipient: user._id },
     { recipientRole: 'all', ...unassignedRecipientScope() }
   ];
+  if (user.role === 'student' && studentCodeOf(user)) {
+    scopes.push({ recipientStudentId: studentCodeOf(user) });
+  }
   if (user.role !== 'admin' || isSystemAdmin(user)) {
     scopes.push({ recipientRole: user.role, ...unassignedRecipientScope() });
   }
@@ -33,12 +37,16 @@ const notDeletedByUser = (user) => ({
 });
 
 const canAccessNotification = (notif, user) => notificationScope(user).some(scope => {
+  if (scope.recipientStudentId) return String(notif.recipientStudentId || '').toUpperCase() === String(scope.recipientStudentId).toUpperCase();
   if (scope.recipient) return String(notif.recipient || '') === String(scope.recipient);
   if (notif.recipient && String(notif.recipient) !== String(user._id)) return false;
   return notif.recipientRole === scope.recipientRole;
 });
 
-const isDirectNotification = (notif, user) => String(notif.recipient || '') === String(user._id);
+const isDirectNotification = (notif, user) => (
+  String(notif.recipient || '') === String(user._id) ||
+  (user.role === 'student' && studentCodeOf(user) && String(notif.recipientStudentId || '').toUpperCase() === studentCodeOf(user))
+);
 
 const cleanupExpiredNotifications = async () => {
   const cutoff = new Date(Date.now() - AUTO_DELETE_MS);

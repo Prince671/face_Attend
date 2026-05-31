@@ -12,6 +12,7 @@ import AppConfirmModal from '../../components/AppConfirmModal';
 import BulkProgressOverlay from '../../components/BulkProgressOverlay';
 import { handleDeleteScheduled } from '../../utils/deleteUndo';
 import { sortByStudentIdTail } from '../../utils/studentSort';
+import { useSmoothBulkProgress } from '../../utils/smoothBulkProgress';
 
 const STATUS_COLORS = {
   active: 'badge-success', pending: 'badge-warning',
@@ -72,7 +73,14 @@ export default function AdminStudents() {
   const [importBranch, setImportBranch] = useState('Computer Science');
   const [importSemester, setImportSemester] = useState('6');
   const [importing, setImporting] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState(null);
+  const {
+    bulkProgress,
+    startBulkProgress,
+    markBulkUploadProgress,
+    markBulkProcessing,
+    completeBulkProgress,
+    clearBulkProgress
+  } = useSmoothBulkProgress();
   const tab = searchParams.get('tab') || 'pending';
   const selectedCourse = searchParams.get('course') || '';
   const selectedBranch = searchParams.get('branch') || '';
@@ -194,30 +202,35 @@ export default function AdminStudents() {
     formData.append('semester', importSemester);
     setImporting(true);
     const controller = new AbortController();
-    setBulkProgress({ title: 'Importing Students', progress: 0, controller });
+    startBulkProgress({ title: 'Importing Students', controller, message: 'Preparing spreadsheet upload...' });
     try {
       const res = await adminAPI.importStudents(formData, {
         signal: controller.signal,
         onUploadProgress: event => {
-          if (!event.total) return;
-          setBulkProgress(current => current ? { ...current, progress: Math.min(92, Math.round((event.loaded * 92) / event.total)) } : current);
+          markBulkUploadProgress(event);
+          if (event.total && event.loaded >= event.total) markBulkProcessing('Upload complete. Creating student accounts safely...');
         }
       });
-      setBulkProgress(current => current ? { ...current, progress: 100 } : current);
+      completeBulkProgress('Student import completed.');
       const summary = res.data.summary || {};
       toast.success(`Imported ${(summary.created || 0) + (summary.updated || 0)} students`);
       if (summary.skipped) {
         const reason = summary.errors?.[0]?.message ? ` First issue: ${summary.errors[0].message}` : '';
-        toast.error(`${summary.skipped} of ${summary.processed || 'the'} rows skipped.${reason}`);
+        toast(`${summary.skipped} of ${summary.processed || 'the'} rows skipped.${reason}`);
       }
       setShowImport(false);
       setImportFile(null);
       fetchData();
     } catch (error) {
-      toast.error(error.code === 'ERR_CANCELED' ? 'Student import canceled before upload completed' : (error.response?.data?.message || 'Student import failed'));
+      const timedOut = error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''));
+      toast.error(error.code === 'ERR_CANCELED'
+        ? 'Student import canceled before upload completed'
+        : timedOut
+          ? 'Student import is taking longer than expected. Please refresh the list before retrying.'
+          : (error.response?.data?.message || 'Student import failed'));
     } finally {
       setImporting(false);
-      window.setTimeout(() => setBulkProgress(null), 350);
+      clearBulkProgress();
     }
   };
 
@@ -430,11 +443,9 @@ export default function AdminStudents() {
         open={Boolean(bulkProgress)}
         title={bulkProgress?.title}
         progress={bulkProgress?.progress}
-        message={bulkProgress?.progress >= 100
-          ? 'Upload complete. Saving records safely...'
-          : bulkProgress?.progress >= 90
-            ? `${bulkProgress?.progress || 0}% uploaded. Processing records safely...`
-            : `${bulkProgress?.progress || 0}% uploaded`}
+        message={bulkProgress?.message || (bulkProgress?.phase === 'processing'
+          ? 'Processing records safely...'
+          : `${bulkProgress?.progress || 0}% uploaded`)}
         onCancel={bulkProgress?.controller ? () => bulkProgress.controller.abort() : undefined}
       />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

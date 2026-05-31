@@ -28,7 +28,8 @@ const eventTagMap = {
   chat_group_deleted: ['ChatGroups', 'ChatMessages', 'ChatGallery'],
   chat_member_added: ['ChatGroups'],
   chat_member_removed: ['ChatGroups'],
-  chat_member_left: ['ChatGroups']
+  chat_member_left: ['ChatGroups'],
+  chat_activity_created: ['ChatGroups']
 };
 
 export default function RealtimeBridge() {

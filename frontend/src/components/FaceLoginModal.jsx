@@ -5,6 +5,7 @@ import Webcam from 'react-webcam';
 import toast from 'react-hot-toast';
 import { Camera, RefreshCw, ScanFace, X } from 'lucide-react';
 import { authAPI } from '../services/api';
+import DynamicFaceGuide from './DynamicFaceGuide';
 
 const AUTO_CAPTURE_READY_FRAMES = 1;
 const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
@@ -30,7 +31,8 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
   const lastFaceBox = useRef(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
-  const [status, setStatus] = useState('Center your face inside the oval');
+  const [status, setStatus] = useState('Look at the camera and keep your face visible');
+  const [detectedFaceBox, setDetectedFaceBox] = useState(null);
   const [ready, setReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [matching, setMatching] = useState(false);
@@ -142,7 +144,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
       const formData = new FormData();
       formData.append('guideFrame', file);
       const response = await authAPI.detectRegistrationFace(formData);
-      return response.data || { ready: false, message: 'Move your face into the oval' };
+      return response.data || { ready: false, message: 'Move your face into the camera frame' };
     } catch (err) {
       if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
         mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
@@ -214,9 +216,10 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
   const resetCamera = useCallback(() => {
     autoCaptureFrames.current = 0;
     lastFaceBox.current = null;
+    setDetectedFaceBox(null);
     setReady(false);
     setCameraError('');
-    setStatus('Center your face inside the oval');
+    setStatus('Look at the camera and keep your face visible');
     setRequestKey(key => key + 1);
   }, []);
 
@@ -224,7 +227,8 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
     if (!open) return undefined;
     setCameraReady(false);
     setCameraError('');
-    setStatus('Center your face inside the oval');
+    setStatus('Look at the camera and keep your face visible');
+    setDetectedFaceBox(null);
     setReady(false);
     setSubmitting(false);
     setMatching(false);
@@ -244,7 +248,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
 
     const FaceDetector = window.FaceDetector;
     const detector = FaceDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
-    if (!detector) setStatus('Move your face inside the oval');
+    if (!detector) setStatus('Move your face into the camera frame');
 
     const detectionIntervalMs = detector ? 180 : 1400;
     autoCaptureTimer.current = window.setInterval(async () => {
@@ -257,13 +261,13 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setReady(false);
-          setStatus(probe.message || 'Move your face into the oval');
+          setStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
 
         autoCaptureFrames.current += 1;
         setReady(true);
-        setStatus('Face detected inside the oval. Hold still...');
+        setStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
@@ -277,18 +281,20 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
         if (faces.length !== 1) {
           autoCaptureFrames.current = 0;
           lastFaceBox.current = null;
+          setDetectedFaceBox(null);
           setReady(false);
-          setStatus(faces.length > 1 ? 'Only one face should be visible' : 'Move your face into the oval');
+          setStatus(faces.length > 1 ? 'Only one face should be visible' : 'Move your face into the camera frame');
           return;
         }
 
         const box = faces[0].boundingBox;
         lastFaceBox.current = box;
+        setDetectedFaceBox(box);
         const gate = isFaceInsideGuide(box, video);
         if (!gate.centered) {
           autoCaptureFrames.current = 0;
           setReady(false);
-          setStatus('Center your face inside the oval');
+          setStatus('Center your face in the camera frame');
           return;
         }
         if (!gate.sizeOk) {
@@ -312,12 +318,12 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setReady(false);
-          setStatus(probe.message || 'Move your face into the oval');
+          setStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
         autoCaptureFrames.current += 1;
         setReady(true);
-        setStatus('Face detected inside the oval. Hold still...');
+        setStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
@@ -380,9 +386,7 @@ export default function FaceLoginModal({ open, onClose, onSuccess }) {
                   toast.error(message);
                 }}
               />
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className={`h-[62%] w-[42%] rounded-[50%] border-4 ${ready ? 'border-emerald-400 shadow-[0_0_35px_rgba(52,211,153,.45)]' : 'border-primary-400/80'} transition-all`} />
-              </div>
+              <DynamicFaceGuide box={detectedFaceBox} videoRef={webcamRef} ready={ready} mirrored scanning={cameraReady && !matching} />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 to-transparent p-4">
                 <p className={`text-sm font-medium ${ready ? 'text-emerald-300' : 'text-slate-200'}`}>{status}</p>
               </div>

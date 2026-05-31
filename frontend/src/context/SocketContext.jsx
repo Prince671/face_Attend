@@ -30,6 +30,7 @@ const REALTIME_EVENTS = [
   'chat_member_added',
   'chat_member_removed',
   'chat_member_left',
+  'chat_activity_created',
 ];
 
 const eventDomains = {
@@ -60,6 +61,7 @@ const eventDomains = {
   chat_member_added: ['chat'],
   chat_member_removed: ['chat'],
   chat_member_left: ['chat'],
+  chat_activity_created: ['chat'],
 };
 
 const SocketContext = createContext({ socket: null, realtimeEvent: null, realtimeVersion: 0 });

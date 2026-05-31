@@ -19,6 +19,7 @@ const pollOptionSchema = new mongoose.Schema({
 const chatMessageSchema = new mongoose.Schema({
   group: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatGroup', required: true, index: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  senderStudentId: { type: String, trim: true, uppercase: true, index: true },
   type: { type: String, enum: ['text', 'media', 'system', 'poll'], default: 'text' },
   text: { type: String, default: '', maxlength: 5000 },
   attachments: [attachmentSchema],

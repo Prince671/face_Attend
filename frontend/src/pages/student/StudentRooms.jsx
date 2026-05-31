@@ -22,6 +22,7 @@ import {
   GalleryHorizontal,
   Image as ImageIcon,
   Info,
+  Languages,
   Link as LinkIcon,
   Loader2,
   Lock,
@@ -662,6 +663,12 @@ export default function StudentRooms() {
   const [pollForm, setPollForm] = useState(emptyPollForm);
   const [gallery, setGallery] = useState(null);
   const [galleryTab, setGalleryTab] = useState('images');
+  const [resources, setResources] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
+  const [resourceLoading, setResourceLoading] = useState(false);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [translationPanel, setTranslationPanel] = useState(null);
+  const [translationBusy, setTranslationBusy] = useState('');
   const [invite, setInvite] = useState(null);
   const [showInviteQr, setShowInviteQr] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
@@ -1109,6 +1116,12 @@ export default function StudentRooms() {
   }, [activeGroupId, loadMessages, messageFilter, messageSearch]);
 
   useEffect(() => {
+    if (!showInfo || !activeGroup?._id) return;
+    loadResources();
+    if (isGroupAdmin) loadActivityLog();
+  }, [showInfo, activeGroup?._id, isGroupAdmin]);
+
+  useEffect(() => {
     if (isMobile) setActiveGroupId('');
   }, [isMobile]);
 
@@ -1207,7 +1220,10 @@ export default function StudentRooms() {
       }
     };
     const onUpdated = ({ groupId, message }) => {
-      if (String(groupId) === String(activeGroupId)) setMessages(current => current.map(item => item._id === message._id ? message : item));
+      if (String(groupId) === String(activeGroupId)) {
+        setMessages(current => current.map(item => item._id === message._id ? message : item));
+        if (showInfo) loadResources();
+      }
     };
     const onDeleted = ({ groupId, message }) => {
       if (String(groupId) === String(activeGroupId)) {
@@ -1239,6 +1255,10 @@ export default function StudentRooms() {
       setOnlineUserIds(ids);
       setLastSeenByUserId(lastSeen);
     };
+    const onActivity = ({ groupId, activity }) => {
+      if (String(groupId) !== String(activeGroupId) || !activity) return;
+      setActivityLog(current => current.some(item => item._id === activity._id) ? current : [activity, ...current].slice(0, 100));
+    };
     socket.on('chat_message_created', onMessage);
     socket.on('chat_message_updated', onUpdated);
     socket.on('chat_message_deleted', onDeleted);
@@ -1251,6 +1271,7 @@ export default function StudentRooms() {
     socket.on('chat_member_left', refreshGroups);
     socket.on('chat_typing', onTyping);
     socket.on('chat_presence_updated', onPresence);
+    socket.on('chat_activity_created', onActivity);
     return () => {
       socket.off('chat_message_created', onMessage);
       socket.off('chat_message_updated', onUpdated);
@@ -1264,8 +1285,9 @@ export default function StudentRooms() {
       socket.off('chat_member_left', refreshGroups);
       socket.off('chat_typing', onTyping);
       socket.off('chat_presence_updated', onPresence);
+      socket.off('chat_activity_created', onActivity);
     };
-  }, [socket, activeGroupId, loadGroups, user?._id]);
+  }, [socket, activeGroupId, loadGroups, user?._id, showInfo]);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -2122,6 +2144,47 @@ export default function StudentRooms() {
     }
   };
 
+  const loadResources = async () => {
+    if (!activeGroup) return;
+    setResourceLoading(true);
+    try {
+      const res = await chatAPI.getResources(activeGroup._id);
+      setResources(res.data.resources || []);
+    } catch {
+      toast.error('Could not load resources');
+    } finally {
+      setResourceLoading(false);
+    }
+  };
+
+  const loadActivityLog = async () => {
+    if (!activeGroup || !isGroupAdmin) return;
+    setActivityLoading(true);
+    try {
+      const res = await chatAPI.getActivityLog(activeGroup._id);
+      setActivityLog(res.data.activities || []);
+    } catch {
+      toast.error('Could not load activity log');
+    } finally {
+      setActivityLoading(false);
+    }
+  };
+
+  const translateMessageText = async (message, targetLanguage = 'en') => {
+    if (!message?._id) return;
+    setTranslationBusy(`${message._id}:${targetLanguage}`);
+    try {
+      const res = await chatAPI.translateMessage(message._id, targetLanguage);
+      setTranslationPanel({ messageId: message._id, ...res.data });
+      setActionMessage(null);
+      if (res.data.approximate) toast('Basic translation shown. Add provider env for full coverage.');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not translate message');
+    } finally {
+      setTranslationBusy('');
+    }
+  };
+
   const loadInvite = async () => {
     if (!activeGroup || !canManageGroup) return;
     setRoomActionBusy('loadInvite');
@@ -2440,6 +2503,15 @@ export default function StudentRooms() {
         {!message.isDeleted && <button type="button" onClick={() => showReceipts(message)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><Info className="h-4 w-4" /> Message info</button>}
         {!message.isDeleted && <button type="button" onClick={() => { setReplyTo(message); setSelectedMessages([]); setActionMessage(null); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><CornerUpLeft className="h-4 w-4" /> Reply</button>}
         {!message.isDeleted && <button type="button" onClick={() => copyMessage(message)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><FileText className="h-4 w-4" /> Copy</button>}
+        {!message.isDeleted && message.text && (
+          <div className="rounded-lg border border-white/10 p-1">
+            <p className="px-2 pb-1 text-[10px] uppercase tracking-wide text-slate-500">Translate</p>
+            <div className="grid grid-cols-2 gap-1">
+              <button type="button" disabled={translationBusy === `${message._id}:en`} onClick={() => translateMessageText(message, 'en')} className="flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs text-slate-100 hover:bg-white/10 disabled:opacity-60"><Languages className="h-3.5 w-3.5" /> English</button>
+              <button type="button" disabled={translationBusy === `${message._id}:hi`} onClick={() => translateMessageText(message, 'hi')} className="flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs text-slate-100 hover:bg-white/10 disabled:opacity-60"><Languages className="h-3.5 w-3.5" /> Hindi</button>
+            </div>
+          </div>
+        )}
         {!message.isDeleted && <button type="button" onClick={() => { setForwardMessage(message); setActionMessage(null); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><Forward className="h-4 w-4" /> Forward</button>}
         {!message.isDeleted && <button type="button" onClick={() => openPinConfirm(message)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><Pin className="h-4 w-4" /> Pin</button>}
         {!message.isDeleted && <button type="button" onClick={() => toggleImportant(message)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-slate-100 hover:bg-white/10"><Flag className="h-4 w-4" /> {message.isImportant ? 'Remove important' : 'Mark important'}</button>}
@@ -2931,6 +3003,61 @@ export default function StudentRooms() {
                       </div>
 
                       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:rounded-2xl sm:p-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <h3 className="flex items-center gap-2 text-xs font-semibold text-white sm:text-sm"><Pin className="h-4 w-4 text-primary-300" /> Pinned Resources</h3>
+                          <button type="button" onClick={loadResources} disabled={resourceLoading} className="rounded-full border border-white/10 px-3 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 disabled:opacity-60">
+                            {resourceLoading ? 'Loading' : 'Refresh'}
+                          </button>
+                        </div>
+                        <div className="flex gap-2 overflow-x-auto pb-2">
+                          {resources.slice(0, 18).map((item, index) => (
+                            <a
+                              key={`${item.messageId}-${item.url || index}`}
+                              href={item.url ? fileUrl(item.url) : undefined}
+                              target={item.url ? '_blank' : undefined}
+                              rel="noreferrer"
+                              onClick={(event) => {
+                                if (!item.url) {
+                                  event.preventDefault();
+                                  setShowInfo(false);
+                                  window.setTimeout(() => jumpToMessage(item.messageId), 120);
+                                }
+                              }}
+                              className="min-w-[12rem] max-w-[14rem] rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left text-xs text-slate-200 hover:bg-white/10"
+                            >
+                              <div className="mb-2 flex items-center gap-2 text-primary-200">
+                                {item.type === 'link' ? <LinkIcon className="h-4 w-4" /> : item.type === 'file' ? <FileText className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                                <span className="truncate font-semibold">{item.isPinned ? 'Pinned' : item.isImportant ? 'Important' : item.type}</span>
+                              </div>
+                              <p className="line-clamp-3 break-words">{item.title}</p>
+                              <p className="mt-2 truncate text-[10px] text-slate-500">{item.sender?.name || 'Room'} - {formatDateTime(item.createdAt)}</p>
+                            </a>
+                          ))}
+                          {!resources.length && <p className="min-w-full rounded-xl border border-dashed border-white/10 py-6 text-center text-xs text-slate-500">No pinned resources yet. Pin or mark files, links, and notes important to keep them here.</p>}
+                        </div>
+                      </div>
+
+                      {isGroupAdmin && (
+                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:rounded-2xl sm:p-4">
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <h3 className="flex items-center gap-2 text-xs font-semibold text-white sm:text-sm"><ShieldCheck className="h-4 w-4 text-emerald-300" /> Admin Activity Log</h3>
+                            <button type="button" onClick={loadActivityLog} disabled={activityLoading} className="rounded-full border border-white/10 px-3 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 disabled:opacity-60">
+                              {activityLoading ? 'Loading' : 'Refresh'}
+                            </button>
+                          </div>
+                          <div className="max-h-44 space-y-2 overflow-y-auto pr-1 [scrollbar-width:thin]">
+                            {activityLog.map(activity => (
+                              <div key={activity._id} className="rounded-xl bg-white/[0.03] p-2 text-xs text-slate-300">
+                                <p className="text-slate-100">{activity.label}</p>
+                                <p className="mt-1 text-[10px] text-slate-500">{activity.actor?.name || 'System'} - {formatDateTime(activity.createdAt)}</p>
+                              </div>
+                            ))}
+                            {!activityLog.length && <p className="rounded-xl border border-dashed border-white/10 py-6 text-center text-xs text-slate-500">No admin activity recorded yet.</p>}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:rounded-2xl sm:p-4">
                         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <h3 className="flex items-center gap-2 text-xs font-semibold text-white sm:text-sm"><Users className="h-4 w-4 text-primary-300" /> Members</h3>
                           <div className="relative sm:w-64">
@@ -3222,6 +3349,15 @@ export default function StudentRooms() {
                           <>
                             {message.isForwarded && <p className="mb-1 text-[11px] italic text-slate-400">Forwarded</p>}
                             {message.type === 'poll' ? renderPoll(message) : message.text && renderMessageText(message)}
+                            {translationPanel?.messageId === message._id && (
+                              <div className="mt-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-2 text-xs text-emerald-50">
+                                <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
+                                  <span>{translationPanel.targetLanguage === 'hi' ? 'Hindi translation' : 'English translation'}</span>
+                                  <button type="button" onClick={() => setTranslationPanel(null)} className="text-emerald-100/70 hover:text-white">Close</button>
+                                </div>
+                                <p className="whitespace-pre-wrap leading-5">{translationPanel.translatedText}</p>
+                              </div>
+                            )}
                             {(message.attachments || []).map(attachment => renderAttachment(attachment, message))}
                           </>
                         )}

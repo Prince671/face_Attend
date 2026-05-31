@@ -14,6 +14,7 @@ const { logAudit } = require('../utils/auditLogger');
 const { schedulePendingDeletion } = require('../utils/pendingDeletion');
 const { loadWorkbook, rowToValues } = require('../utils/excelWorkbook');
 const { canReceiveSubjectUpdates } = require('../utils/restrictionPolicy');
+const { studentCodeOf } = require('../utils/studentIdentity');
 
 const KNOWN_DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const COURSE_OPTIONS = ['B. Tech', 'Diploma', 'BBA', 'MBA'];
@@ -280,7 +281,17 @@ const activeSubjectRestriction = (student, subjectId) => (
 );
 
 const notifyUsers = async (req, notifications = []) => {
-  const created = await Promise.all(notifications.map(item => Notification.create(item)));
+  const studentRecipientIds = notifications
+    .filter(item => item?.recipientRole === 'student' && item.recipient && !item.recipientStudentId)
+    .map(item => item.recipient);
+  const students = studentRecipientIds.length
+    ? await User.find({ _id: { $in: studentRecipientIds } }).select('_id studentId').lean()
+    : [];
+  const studentsById = new Map(students.map(student => [String(student._id), student]));
+  const created = await Promise.all(notifications.map(item => Notification.create({
+    ...item,
+    recipientStudentId: item.recipientStudentId || (item.recipientRole === 'student' ? studentCodeOf(studentsById.get(String(item.recipient))) : undefined)
+  })));
   const io = req.app.get('io');
   if (io) {
     created.forEach(notification => {
@@ -291,6 +302,29 @@ const notifyUsers = async (req, notifications = []) => {
     });
   }
   return created;
+};
+
+const safeImportSideEffect = async (label, task) => {
+  try {
+    return await task();
+  } catch (error) {
+    console.warn(`${label} failed after import save:`, error.message);
+    return null;
+  }
+};
+
+const mapWithConcurrency = async (items, limit, worker) => {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 };
 
 const getPendingStudents = async (req, res) => {
@@ -2349,9 +2383,23 @@ const importStudents = async (req, res) => {
       role: 'student',
       password: hashedPasswords[index]
     }));
-    const touchedStudents = docsToInsert.length
-      ? await User.insertMany(docsToInsert, { ordered: false })
-      : [];
+    let touchedStudents = [];
+    if (docsToInsert.length) {
+      try {
+        touchedStudents = await User.insertMany(docsToInsert, { ordered: false });
+      } catch (error) {
+        touchedStudents = error.insertedDocs || error.result?.insertedDocs || [];
+        const writeErrors = error.writeErrors || error.result?.result?.writeErrors || [];
+        writeErrors.slice(0, 20).forEach(item => {
+          summary.skipped += 1;
+          summary.errors.push({
+            row: createItems[item.index]?.rowNumber || null,
+            message: item.errmsg || item.message || 'Row could not be imported'
+          });
+        });
+        if (!touchedStudents.length) throw error;
+      }
+    }
     summary.created = touchedStudents.length;
 
     const subjects = touchedStudents.length
@@ -2374,7 +2422,9 @@ const importStudents = async (req, res) => {
         }
       };
     }).filter(Boolean);
-    if (enrollmentOps.length) await User.bulkWrite(enrollmentOps, { ordered: false });
+    if (enrollmentOps.length) {
+      await safeImportSideEffect('Student enrollment sync', () => User.bulkWrite(enrollmentOps, { ordered: false }));
+    }
 
     const notifications = touchedStudents.map(student => ({
       recipient: student._id,
@@ -2385,23 +2435,25 @@ const importStudents = async (req, res) => {
         : 'Your student profile was imported by department admin.',
       priority: 'medium'
     }));
-    if (notifications.length) await Notification.insertMany(notifications, { ordered: false });
+    if (notifications.length) {
+      await safeImportSideEffect('Student import notifications', () => Notification.insertMany(notifications, { ordered: false }));
+    }
 
-    await logAudit(req, {
+    await safeImportSideEffect('Student import audit log', () => logAudit(req, {
       action: 'students.imported',
       entityType: 'student',
       entityName: 'Bulk student import',
       targetDepartment: adminDepartment || 'Multiple',
       details: summary
-    });
+    }));
 
     const io = req.app.get('io');
-    if (io) {
-      const payload = { summary, timestamp: new Date() };
+    await safeImportSideEffect('Student import socket emit', async () => {
+      if (!io) return;
+      const payload = { action: 'bulk_imported', summary, timestamp: new Date() };
       io.to('admin_room').emit('student_profile_changed', payload);
       if (adminDepartment) io.to(adminDepartmentRoom(adminDepartment)).emit('student_profile_changed', payload);
-      touchedStudents.forEach(student => emitStudentProfileChange(req, student, 'imported'));
-    }
+    });
 
     res.json({
       success: true,
@@ -2431,7 +2483,19 @@ const importTeachers = async (req, res) => {
     const rows = parseTeacherCsv(filePath);
     const results = [];
     const errors = [];
-    for (const row of rows) {
+    const seenEmails = new Set();
+    const importRows = rows.filter((row) => {
+      const email = String(row.email || '').trim().toLowerCase();
+      if (!email) return true;
+      if (seenEmails.has(email)) {
+        errors.push({ email, message: 'Duplicate teacher email inside this file' });
+        return false;
+      }
+      seenEmails.add(email);
+      return true;
+    });
+
+    const outcomes = await mapWithConcurrency(importRows, 6, async (row) => {
       try {
         const teacher = await upsertTeacher({
           payload: row,
@@ -2439,20 +2503,26 @@ const importTeachers = async (req, res) => {
           fallbackDepartment: adminDepartment,
           defaultPassword
         });
-        results.push({ email: teacher.email, name: teacher.name });
+        return { ok: true, teacher: { email: teacher.email, name: teacher.name } };
       } catch (err) {
-        errors.push({ email: row.email, message: err.message });
+        return { ok: false, error: { email: row.email, message: err.message } };
       }
-    }
+    });
+    outcomes.forEach((outcome) => {
+      if (outcome?.ok) results.push(outcome.teacher);
+      else if (outcome?.error) errors.push(outcome.error);
+    });
 
-    await logAudit(req, {
+    await safeImportSideEffect('Teacher import audit log', () => logAudit(req, {
       action: 'teacher.imported',
       entityType: 'teacher',
       entityName: 'Teacher CSV import',
       targetDepartment: adminDepartment || 'Multiple Departments',
       details: { imported: results.length, failed: errors.length }
+    }));
+    await safeImportSideEffect('Teacher import socket emit', async () => {
+      emitAdminChange(req, 'teacher_changed', { action: 'imported', imported: results.length, failed: errors.length }, adminDepartment);
     });
-    emitAdminChange(req, 'teacher_changed', { action: 'imported', imported: results.length, failed: errors.length }, adminDepartment);
 
     res.json({ success: true, imported: results.length, failed: errors.length, teachers: results, errors });
   } catch (err) {

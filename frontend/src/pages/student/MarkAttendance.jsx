@@ -8,6 +8,7 @@ import { attendanceAPI, studentAPI, subjectAPI } from '../../services/api';
 import AdminBreadcrumb from '../../components/AdminBreadcrumb';
 import { useSocket } from '../../context/SocketContext';
 import { SkeletonLine } from '../../components/LoadingStates';
+import DynamicFaceGuide from '../../components/DynamicFaceGuide';
 
 const STEPS = { CODE: 'code', CAMERA: 'camera', VERIFYING: 'verifying', SUCCESS: 'success', ERROR: 'error' };
 const AUTO_CAPTURE_READY_FRAMES = 1;
@@ -52,7 +53,8 @@ export default function MarkAttendance() {
   const [cameraRequestKey, setCameraRequestKey] = useState(0);
   const [selectedLecture, setSelectedLecture] = useState(null);
   const [subjects, setSubjects] = useState([]);
-  const [autoCaptureStatus, setAutoCaptureStatus] = useState('Align your face inside the oval');
+  const [autoCaptureStatus, setAutoCaptureStatus] = useState('Look at the camera and keep your face visible');
+  const [detectedFaceBox, setDetectedFaceBox] = useState(null);
   const [autoCaptureReady, setAutoCaptureReady] = useState(false);
   const [autoCaptureAvailable, setAutoCaptureAvailable] = useState(true);
   const [autoSubmitAfterCapture, setAutoSubmitAfterCapture] = useState(false);
@@ -213,7 +215,7 @@ export default function MarkAttendance() {
       const formData = new FormData();
       formData.append('guideFrame', file);
       const response = await attendanceAPI.detectGuideFace(formData);
-      return response.data || { ready: false, message: 'Move your face into the oval' };
+      return response.data || { ready: false, message: 'Move your face into the camera frame' };
     } catch (err) {
       if (err.response?.status === 503 || err.code === 'ERR_NETWORK') {
         mlProbeBackoffUntil.current = Date.now() + ML_GUIDE_PROBE_BACKOFF_MS;
@@ -232,7 +234,8 @@ export default function MarkAttendance() {
     setLivenessFrameImages([]);
     autoCaptureFrames.current = 0;
     setAutoCaptureReady(false);
-    setAutoCaptureStatus('Align your face inside the oval');
+    setAutoCaptureStatus('Look at the camera and keep your face visible');
+    setDetectedFaceBox(null);
     setAutoSubmitAfterCapture(false);
   };
 
@@ -309,7 +312,7 @@ export default function MarkAttendance() {
     const detector = FaceDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
     setAutoCaptureAvailable(true);
     if (!detector) {
-      setAutoCaptureStatus('Move your face inside the oval');
+      setAutoCaptureStatus('Move your face into the camera frame');
     }
 
     const detectionIntervalMs = detector ? 180 : 1400;
@@ -323,13 +326,13 @@ export default function MarkAttendance() {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus(probe.message || 'Move your face into the oval');
+          setAutoCaptureStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
 
         autoCaptureFrames.current += 1;
         setAutoCaptureReady(true);
-        setAutoCaptureStatus('Face detected inside the oval. Hold still...');
+        setAutoCaptureStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
@@ -343,17 +346,19 @@ export default function MarkAttendance() {
         if (faces.length !== 1) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus(faces.length > 1 ? 'Only one face should be visible' : 'Move your face into the oval');
+          setAutoCaptureStatus(faces.length > 1 ? 'Only one face should be visible' : 'Move your face into the camera frame');
           lastFaceBox.current = null;
+          setDetectedFaceBox(null);
           return;
         }
 
         lastFaceBox.current = faces[0].boundingBox;
+        setDetectedFaceBox(faces[0].boundingBox);
         const { ready, centered, sizeOk } = isFaceInsideGuide(faces[0].boundingBox, video);
         if (!centered) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus('Center your face inside the oval');
+          setAutoCaptureStatus('Center your face in the camera frame');
           return;
         }
         if (!sizeOk) {
@@ -378,13 +383,13 @@ export default function MarkAttendance() {
         if (!probe.ready) {
           autoCaptureFrames.current = 0;
           setAutoCaptureReady(false);
-          setAutoCaptureStatus(probe.message || 'Move your face into the oval');
+          setAutoCaptureStatus(probe.message || 'Move your face into the camera frame');
           return;
         }
 
         autoCaptureFrames.current += 1;
         setAutoCaptureReady(true);
-        setAutoCaptureStatus('Face detected inside the oval. Hold still...');
+        setAutoCaptureStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
@@ -466,9 +471,10 @@ export default function MarkAttendance() {
     setCodePromptOpen(false);
     autoCaptureFrames.current = 0;
     setAutoCaptureReady(false);
-    setAutoCaptureStatus('Align your face inside the oval');
+    setAutoCaptureStatus('Look at the camera and keep your face visible');
     setAutoSubmitAfterCapture(false);
     lastFaceBox.current = null;
+    setDetectedFaceBox(null);
   };
 
   const openLectureBySubject = new Map(openLectures.map(lecture => [String(lecture.subject?._id || lecture.subject), lecture]));
@@ -626,15 +632,7 @@ export default function MarkAttendance() {
                     {cameraReady && (
                       <>
                         <div className="camera-overlay" />
-                        <div className="scan-line" />
-                        {/* Face guide */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className={`w-40 h-48 border-2 rounded-[50%] transition-all duration-300 ${
-                            autoCaptureReady
-                              ? 'border-emerald-400/90 shadow-[0_0_28px_rgba(16,185,129,0.35)]'
-                              : 'border-primary-400/60 opacity-70'
-                          }`} />
-                        </div>
+                        <DynamicFaceGuide box={detectedFaceBox} videoRef={webcamRef} ready={autoCaptureReady} scanning={!capturedImage} />
                       </>
                     )}
                     {!cameraReady && !cameraError && (

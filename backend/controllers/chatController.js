@@ -9,9 +9,11 @@ const ChatReaction = require('../models/ChatReaction');
 const ChatReadReceipt = require('../models/ChatReadReceipt');
 const ChatReport = require('../models/ChatReport');
 const ChatJoinRequest = require('../models/ChatJoinRequest');
+const ChatActivity = require('../models/ChatActivity');
 const Notification = require('../models/Notification');
 const { isProfileRestricted } = require('../utils/restrictionPolicy');
 const { uploadFile, deleteImage } = require('../utils/cloudinary');
+const { studentCodeOf, userIdentityFilter } = require('../utils/studentIdentity');
 
 const objectId = (id) => new mongoose.Types.ObjectId(id);
 const chatGroupRoom = (groupId) => `chat_group_${groupId}`;
@@ -58,16 +60,16 @@ const inviteExpired = (group) => {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 };
 
-const getActiveMembership = async (groupId, userId) => ChatGroupMember.findOne({
+const getActiveMembership = async (groupId, user) => ChatGroupMember.findOne({
   group: groupId,
-  user: userId,
+  ...userIdentityFilter(user),
   isActive: true,
 }).populate('user', memberSelect);
 
 const assertMember = async (req, groupId, options = {}) => {
   const [group, membership] = await Promise.all([
     ChatGroup.findOne({ _id: groupId, isDeleted: { $ne: true } }),
-    getActiveMembership(groupId, req.user._id),
+    getActiveMembership(groupId, req.user),
   ]);
   if (!group) {
     const error = new Error('Group not found');
@@ -212,6 +214,24 @@ const emitToUsers = async (req, groupId, event, payload) => {
   members.forEach(member => io.to(chatUserRoom(member.user)).emit(event, payload));
 };
 
+const recordActivity = async (req, groupId, action, label, metadata = {}) => {
+  try {
+    const activity = await ChatActivity.create({
+      group: groupId,
+      actor: req.user?._id,
+      action,
+      label,
+      metadata,
+    });
+    const populated = await ChatActivity.findById(activity._id).populate('actor', messageSelect).lean();
+    await emitToUsers(req, groupId, 'chat_activity_created', { groupId, activity: populated });
+    return populated;
+  } catch (error) {
+    console.error('chat activity log failed:', error.message);
+    return null;
+  }
+};
+
 const notifyMentions = async (req, group, message, mentionedIds = []) => {
   const ids = validObjectIds(mentionedIds).filter(id => String(id) !== String(req.user._id));
   if (!ids.length) return;
@@ -295,8 +315,9 @@ const createSystemMessage = async (req, group, text, systemEvent = 'message') =>
   return serialized;
 };
 
-const groupSummary = async (group, userId) => {
-  const viewerMembership = await ChatGroupMember.findOne({ group: group._id, user: userId, isActive: true }).select('clearedAt isPinned isArchived isHidden lockCode draftText hidePresence blockedUsers').lean();
+const groupSummary = async (group, userId, viewer = null) => {
+  const viewerIdentity = viewer || { _id: userId };
+  const viewerMembership = await ChatGroupMember.findOne({ group: group._id, ...userIdentityFilter(viewerIdentity), isActive: true }).select('clearedAt isPinned isArchived isHidden lockCode draftText hidePresence blockedUsers role').lean();
   const visibleAfter = viewerMembership?.clearedAt ? { createdAt: { $gt: viewerMembership.clearedAt } } : {};
   const visibleToViewer = { ...visibleAfter, deletedFor: { $ne: userId } };
   const [members, lastMessage, unreadCount] = await Promise.all([
@@ -329,18 +350,18 @@ const groupSummary = async (group, userId) => {
       hidePresence: Boolean(viewerMembership?.hidePresence),
       blockedUsers: viewerMembership?.blockedUsers || [],
     },
-    myRole: members.find(member => String(member.user?._id || member.user) === String(userId))?.role || 'member',
+    myRole: viewerMembership?.role || members.find(member => String(member.user?._id || member.user) === String(userId))?.role || 'member',
   };
 };
 
 const getGroups = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
-    const memberships = await ChatGroupMember.find({ user: req.user._id, isActive: true }).select('group role').lean();
+    const memberships = await ChatGroupMember.find({ ...userIdentityFilter(req.user), isActive: true }).select('group role').lean();
     const groupIds = memberships.map(item => item.group);
     await deliverDueScheduledMessages(req, groupIds);
     const groups = await ChatGroup.find({ _id: { $in: groupIds }, isDeleted: { $ne: true } }).sort({ lastMessageAt: -1, updatedAt: -1 });
-    const summaries = await Promise.all(groups.map(group => groupSummary(group, req.user._id)));
+    const summaries = await Promise.all(groups.map(group => groupSummary(group, req.user._id, req.user)));
     res.json({ success: true, groups: summaries });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
@@ -395,9 +416,11 @@ const createGroup = async (req, res) => {
     });
     await ChatGroupMember.bulkWrite(students.map(student => ({
       updateOne: {
-        filter: { group: group._id, user: student._id },
+        filter: { group: group._id, ...userIdentityFilter(student) },
         update: {
           $set: {
+            user: student._id,
+            userStudentId: studentCodeOf(student),
             role: String(student._id) === String(req.user._id) ? 'admin' : 'member',
             addedBy: req.user._id,
             isActive: true,
@@ -409,7 +432,7 @@ const createGroup = async (req, res) => {
       },
     })));
     await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) created the group.`, 'group_created');
-    const summary = await groupSummary(group, req.user._id);
+    const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_group_created', { group: summary });
     res.status(201).json({ success: true, group: summary });
   } catch (error) {
@@ -481,6 +504,7 @@ const createMessage = async (req, res) => {
     const message = await ChatMessage.create({
       group: group._id,
       sender: req.user._id,
+      senderStudentId: studentCodeOf(req.user),
       type: attachments.length ? 'media' : 'text',
       text,
       attachments,
@@ -536,8 +560,9 @@ const updateGroup = async (req, res) => {
     await group.save();
     if (groupSettingsChanged(beforeSettings, groupSettingSnapshot(group))) {
       await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) updated group settings.`, 'group_updated');
+      await recordActivity(req, group._id, 'group_settings_updated', `${req.user.name} updated group settings.`);
     }
-    const summary = await groupSummary(group, req.user._id);
+    const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });
     res.json({ success: true, group: summary });
   } catch (error) {
@@ -562,10 +587,11 @@ const updateGroupAvatar = async (req, res) => {
     group.avatarResourceType = uploaded.resourceType || 'image';
     await group.save();
     await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) updated the group image.`, 'group_updated');
+    await recordActivity(req, group._id, 'group_image_updated', `${req.user.name} updated the group image.`);
     if (previousPublicId) {
       deleteImage(previousPublicId, { resourceType: previousResourceType }).catch(() => null);
     }
-    const summary = await groupSummary(group, req.user._id);
+    const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });
     res.json({ success: true, group: summary });
   } catch (error) {
@@ -609,15 +635,16 @@ const addMembers = async (req, res) => {
     if (!students.length) return res.status(400).json({ success: false, message: 'No eligible active students found in this semester.' });
     for (const student of students) {
       await ChatGroupMember.updateOne(
-        { group: group._id, user: student._id },
-        { role: 'member', isActive: true, joinedAt: new Date(), leftAt: null, addedBy: req.user._id },
+        { group: group._id, ...userIdentityFilter(student) },
+        { user: student._id, userStudentId: studentCodeOf(student), role: 'member', isActive: true, joinedAt: new Date(), leftAt: null, addedBy: req.user._id },
         { upsert: true }
       );
     }
     if (students.length) {
       await createSystemMessage(req, group, `${req.user.name} added ${students.length} member${students.length === 1 ? '' : 's'}.`, 'member_added');
+      await recordActivity(req, group._id, 'members_added', `${req.user.name} added ${students.length} member${students.length === 1 ? '' : 's'}.`, { count: students.length });
     }
-    const summary = await groupSummary(group, req.user._id);
+    const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_member_added', { group: summary });
     res.json({ success: true, group: summary });
   } catch (error) {
@@ -637,6 +664,7 @@ const removeMember = async (req, res) => {
     ).populate('user', memberSelect);
     if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
     await createSystemMessage(req, group, `${member.user.name} (${member.user.studentId}) was removed from the group.`, 'member_removed');
+    await recordActivity(req, group._id, 'member_removed', `${req.user.name} removed ${member.user.name}.`, { removedUser: member.user._id });
     await emitToUsers(req, group._id, 'chat_member_removed', { groupId: group._id, studentId: req.params.studentId });
     res.json({ success: true });
   } catch (error) {
@@ -649,7 +677,7 @@ const leaveGroup = async (req, res) => {
     if (!ensureStudent(req, res)) return;
     const { group } = await assertMember(req, req.params.groupId);
     const activeAdmins = await ChatGroupMember.countDocuments({ group: group._id, isActive: true, role: 'admin', user: { $ne: req.user._id } });
-    const mine = await ChatGroupMember.findOne({ group: group._id, user: req.user._id, isActive: true });
+    const mine = await ChatGroupMember.findOne({ group: group._id, ...userIdentityFilter(req.user), isActive: true });
     if (mine?.role === 'admin' && activeAdmins === 0) {
       return res.status(400).json({ success: false, message: 'Make another member admin before leaving.' });
     }
@@ -675,7 +703,8 @@ const setMemberAdmin = async (req, res) => {
     ).populate('user', memberSelect);
     if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
     await createSystemMessage(req, group, `${member.user.name} (${member.user.studentId}) is now ${member.role === 'admin' ? 'a group admin' : 'a member'}.`, 'member_promoted');
-    const summary = await groupSummary(group, req.user._id);
+    await recordActivity(req, group._id, member.role === 'admin' ? 'member_promoted' : 'member_demoted', `${req.user.name} made ${member.user.name} ${member.role === 'admin' ? 'a group admin' : 'a member'}.`, { targetUser: member.user._id });
+    const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });
     res.json({ success: true, group: summary });
   } catch (error) {
@@ -831,6 +860,7 @@ const pinMessage = async (req, res) => {
     await group.save();
     const serialized = await serializeMessage(message, req.user._id);
     emitToGroup(req, group._id, 'chat_message_updated', { groupId: group._id, message: serialized });
+    await recordActivity(req, group._id, 'message_pinned', `${req.user.name} pinned a message.`, { message: message._id, duration: mode });
     res.json({ success: true, message: serialized });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
@@ -854,6 +884,7 @@ const markImportant = async (req, res) => {
     await message.save();
     const serialized = await serializeMessage(message, req.user._id);
     emitToGroup(req, group._id, 'chat_message_updated', { groupId: group._id, message: serialized });
+    await recordActivity(req, group._id, isImportant ? 'message_marked_important' : 'message_unmarked_important', `${req.user.name} ${isImportant ? 'marked a message important' : 'removed important from a message'}.`, { message: message._id });
     res.json({ success: true, message: serialized });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
@@ -873,6 +904,7 @@ const createPoll = async (req, res) => {
     const message = await ChatMessage.create({
       group: group._id,
       sender: req.user._id,
+      senderStudentId: studentCodeOf(req.user),
       type: 'poll',
       text: question,
       poll: {
@@ -951,6 +983,152 @@ const getMediaGallery = async (req, res) => {
   }
 };
 
+const linkPattern = /https?:\/\/[^\s<>()]+/gi;
+
+const getPinnedResources = async (req, res) => {
+  try {
+    if (!ensureStudent(req, res)) return;
+    const { membership } = await assertMember(req, req.params.groupId);
+    const visibleAfter = membership.clearedAt ? { createdAt: { $gt: membership.clearedAt } } : {};
+    const rows = await ChatMessage.find({
+      group: req.params.groupId,
+      ...visibleAfter,
+      isDeleted: { $ne: true },
+      deletedFor: { $ne: req.user._id },
+      type: { $ne: 'system' },
+      $or: [
+        { isPinned: true },
+        { isImportant: true },
+        { attachments: { $exists: true, $ne: [] } },
+        { text: /https?:\/\/[^\s<>()]+/i },
+      ],
+    })
+      .populate('sender', messageSelect)
+      .sort({ isPinned: -1, isImportant: -1, createdAt: -1 })
+      .limit(200)
+      .lean();
+
+    const resources = rows.flatMap(message => {
+      const attachments = (message.attachments || []).map(file => ({
+        type: ['image', 'gif', 'video'].includes(file.kind) ? 'media' : 'file',
+        title: file.name || file.kind || 'Attachment',
+        url: file.url,
+        kind: file.kind,
+        messageId: message._id,
+        sender: message.sender,
+        isPinned: Boolean(message.isPinned),
+        isImportant: Boolean(message.isImportant),
+        createdAt: message.createdAt,
+      }));
+      const links = [...String(message.text || '').matchAll(linkPattern)].map(match => ({
+        type: 'link',
+        title: match[0],
+        url: match[0],
+        kind: 'link',
+        messageId: message._id,
+        sender: message.sender,
+        isPinned: Boolean(message.isPinned),
+        isImportant: Boolean(message.isImportant),
+        createdAt: message.createdAt,
+      }));
+      if (!attachments.length && !links.length && (message.isPinned || message.isImportant)) {
+        return [{
+          type: 'note',
+          title: message.text || 'Pinned message',
+          url: '',
+          kind: 'note',
+          messageId: message._id,
+          sender: message.sender,
+          isPinned: Boolean(message.isPinned),
+          isImportant: Boolean(message.isImportant),
+          createdAt: message.createdAt,
+        }];
+      }
+      return [...attachments, ...links];
+    });
+
+    res.json({ success: true, resources });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
+  }
+};
+
+const getActivityLog = async (req, res) => {
+  try {
+    if (!ensureStudent(req, res)) return;
+    const { membership } = await assertMember(req, req.params.groupId);
+    if (membership.role !== 'admin') return res.status(403).json({ success: false, message: 'Only group admins can view activity log.' });
+    const rows = await ChatActivity.find({ group: req.params.groupId })
+      .populate('actor', messageSelect)
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, activities: rows });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
+  }
+};
+
+const basicTranslate = (text = '', target = 'en') => {
+  const dictionary = {
+    hi: {
+      hello: 'नमस्ते',
+      hi: 'नमस्ते',
+      thanks: 'धन्यवाद',
+      'thank you': 'धन्यवाद',
+      yes: 'हाँ',
+      no: 'नहीं',
+      please: 'कृपया',
+      assignment: 'असाइनमेंट',
+      quiz: 'क्विज',
+      attendance: 'उपस्थिति',
+      lecture: 'व्याख्यान',
+      notes: 'नोट्स',
+    },
+    en: {
+      'नमस्ते': 'Hello',
+      'धन्यवाद': 'Thank you',
+      'हाँ': 'Yes',
+      'नहीं': 'No',
+      'कृपया': 'Please',
+      'असाइनमेंट': 'Assignment',
+      'क्विज': 'Quiz',
+      'उपस्थिति': 'Attendance',
+      'व्याख्यान': 'Lecture',
+      'नोट्स': 'Notes',
+    },
+  };
+  let translated = String(text || '');
+  Object.entries(dictionary[target] || {}).forEach(([from, to]) => {
+    translated = translated.replace(new RegExp(escapeRegex(from), 'gi'), to);
+  });
+  return translated;
+};
+
+const translateMessage = async (req, res) => {
+  try {
+    if (!ensureStudent(req, res)) return;
+    const targetLanguage = ['en', 'hi'].includes(String(req.body.targetLanguage || '').toLowerCase())
+      ? String(req.body.targetLanguage).toLowerCase()
+      : 'en';
+    const message = await ChatMessage.findById(req.params.messageId).select('group text type isDeleted');
+    if (!message || message.isDeleted) return res.status(404).json({ success: false, message: 'Message not found' });
+    await assertMember(req, message.group);
+    if (!message.text?.trim()) return res.status(400).json({ success: false, message: 'This message has no text to translate.' });
+    const translatedText = basicTranslate(message.text, targetLanguage);
+    res.json({
+      success: true,
+      targetLanguage,
+      translatedText,
+      sourceText: message.text,
+      approximate: translatedText === message.text,
+      message: translatedText === message.text ? 'No local translation match found. Connect a translation provider for full coverage.' : undefined,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
+  }
+};
+
 const reportMessage = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
@@ -1018,6 +1196,7 @@ const regenerateInvite = async (req, res) => {
     if (req.body?.maxUses !== undefined) group.inviteMaxUses = Math.max(0, Number(req.body.maxUses || 0) || 0);
     if (req.body?.requireApproval !== undefined) group.inviteRequireApproval = req.body.requireApproval === true;
     await group.save();
+    await recordActivity(req, group._id, 'invite_link_created', `${req.user.name} created a new invite link.`);
     res.json({ success: true, inviteCode: group.inviteCode, inviteEnabled: true, inviteExpiresAt: group.inviteExpiresAt, inviteMaxUses: group.inviteMaxUses, inviteUses: group.inviteUses, inviteRequireApproval: group.inviteRequireApproval });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
@@ -1025,9 +1204,18 @@ const regenerateInvite = async (req, res) => {
 };
 
 const findOrCreatePrivateGroup = async (req, target) => {
+  const participantCodes = [studentCodeOf(req.user), studentCodeOf(target)].filter(Boolean);
   const sharedGroupIds = await ChatGroupMember.aggregate([
-    { $match: { user: { $in: [objectId(req.user._id), objectId(target._id)] }, isActive: true } },
-    { $group: { _id: '$group', users: { $addToSet: '$user' }, count: { $sum: 1 } } },
+    {
+      $match: {
+        isActive: true,
+        $or: [
+          { user: { $in: [objectId(req.user._id), objectId(target._id)] } },
+          { userStudentId: { $in: participantCodes } }
+        ]
+      }
+    },
+    { $group: { _id: '$group', users: { $addToSet: '$user' }, studentCodes: { $addToSet: '$userStudentId' }, count: { $sum: 1 } } },
     { $match: { count: 2 } },
   ]);
   for (const row of sharedGroupIds) {
@@ -1048,11 +1236,13 @@ const findOrCreatePrivateGroup = async (req, target) => {
     chatMode: 'everyone',
     inviteEnabled: false,
   });
-  await ChatGroupMember.bulkWrite([req.user._id, target._id].map(userId => ({
+  await ChatGroupMember.bulkWrite([req.user, target].map(user => ({
     updateOne: {
-      filter: { group: group._id, user: userId },
+      filter: { group: group._id, ...userIdentityFilter(user) },
       update: {
         $set: {
+          user: user._id,
+          userStudentId: studentCodeOf(user),
           role: 'admin',
           addedBy: req.user._id,
           isActive: true,
@@ -1138,7 +1328,7 @@ const joinByInvite = async (req, res) => {
     if (req.user.department !== base.department || Number(req.user.semester) !== Number(base.semester)) {
       return res.status(403).json({ success: false, message: 'This invite is only for students in the same semester.' });
     }
-    const existing = await ChatGroupMember.findOne({ group: group._id, user: req.user._id });
+    const existing = await ChatGroupMember.findOne({ group: group._id, ...userIdentityFilter(req.user) });
     if (existing?.isActive) {
       const summary = await groupSummary(group, req.user._id);
       return res.json({ success: true, group: summary, alreadyMember: true, message: 'You are already a member of this room.' });
@@ -1153,8 +1343,8 @@ const joinByInvite = async (req, res) => {
       return res.json({ success: true, pendingApproval: true, message: 'Join request sent to room admins.' });
     }
     await ChatGroupMember.updateOne(
-      { group: group._id, user: req.user._id },
-      { isActive: true, role: existing?.role || 'member', joinedAt: new Date(), leftAt: null },
+      { group: group._id, ...userIdentityFilter(req.user) },
+      { user: req.user._id, userStudentId: studentCodeOf(req.user), isActive: true, role: existing?.role || 'member', joinedAt: new Date(), leftAt: null },
       { upsert: true }
     );
     if (!existing) {
@@ -1222,11 +1412,11 @@ const updateMemberPrefs = async (req, res) => {
     if (req.body.hidePresence !== undefined) update.hidePresence = req.body.hidePresence === true;
     if (req.body.blockUserId !== undefined) {
       const op = req.body.blocked === false ? '$pull' : '$addToSet';
-      await ChatGroupMember.updateOne({ group: req.params.groupId, user: req.user._id }, { [op]: { blockedUsers: req.body.blockUserId } });
+      await ChatGroupMember.updateOne({ group: req.params.groupId, ...userIdentityFilter(req.user) }, { [op]: { blockedUsers: req.body.blockUserId } });
     }
-    if (Object.keys(update).length) await ChatGroupMember.updateOne({ group: req.params.groupId, user: req.user._id }, update);
+    if (Object.keys(update).length) await ChatGroupMember.updateOne({ group: req.params.groupId, ...userIdentityFilter(req.user) }, update);
     const group = await ChatGroup.findById(req.params.groupId);
-    const summary = await groupSummary(group, req.user._id);
+    const summary = await groupSummary(group, req.user._id, req.user);
     res.json({ success: true, group: summary });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Server error' });
@@ -1236,7 +1426,7 @@ const updateMemberPrefs = async (req, res) => {
 const getStarredMessages = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
-    const memberships = await ChatGroupMember.find({ user: req.user._id, isActive: true }).select('group').lean();
+    const memberships = await ChatGroupMember.find({ ...userIdentityFilter(req.user), isActive: true }).select('group').lean();
     const groupIds = memberships.map(item => item.group);
     const rows = await ChatMessage.find({ group: { $in: groupIds }, starredBy: req.user._id, isDeleted: { $ne: true } }).sort({ createdAt: -1 }).limit(100).select('_id');
     const messages = await Promise.all(rows.map(row => serializeMessage(row._id, req.user._id)));
@@ -1249,7 +1439,7 @@ const getStarredMessages = async (req, res) => {
 const getScheduledMessages = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
-    const memberships = await ChatGroupMember.find({ user: req.user._id, isActive: true }).select('group').lean();
+    const memberships = await ChatGroupMember.find({ ...userIdentityFilter(req.user), isActive: true }).select('group').lean();
     const groupIds = memberships.map(item => item.group);
     const rows = await ChatMessage.find({ group: { $in: groupIds }, sender: req.user._id, scheduledFor: { $exists: true }, deliveredAt: { $exists: false }, isDeleted: { $ne: true } }).sort({ scheduledFor: 1 }).select('_id');
     const messages = await Promise.all(rows.map(row => serializeMessage(row._id, req.user._id)));
@@ -1309,6 +1499,7 @@ const reviewJoinRequest = async (req, res) => {
       await group.save();
       await createSystemMessage(req, group, `${request.user.name} (${request.user.studentId}) joined after admin approval.`, 'member_added');
     }
+    await recordActivity(req, group._id, approve ? 'join_request_approved' : 'join_request_rejected', `${req.user.name} ${approve ? 'approved' : 'rejected'} ${request.user.name}'s join request.`, { targetUser: request.user._id });
     const summary = await groupSummary(group, req.user._id);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });
     res.json({ success: true, request, group: summary });
@@ -1328,13 +1519,13 @@ const broadcastMessage = async (req, res) => {
     const groups = [];
     for (const target of targets) {
       const group = await findOrCreatePrivateGroup(req, target);
-      const message = await ChatMessage.create({ group: group._id, sender: req.user._id, type: 'text', text, isForwarded: true });
+      const message = await ChatMessage.create({ group: group._id, sender: req.user._id, senderStudentId: studentCodeOf(req.user), type: 'text', text, isForwarded: true });
       group.lastMessage = message._id;
       group.lastMessageAt = message.createdAt;
       await group.save();
       emitToGroup(req, group._id, 'chat_message_created', { groupId: group._id, message: await serializeMessage(message, req.user._id) });
       await emitToUsers(req, group._id, 'chat_group_updated', { groupId: group._id });
-      groups.push(await groupSummary(group, req.user._id));
+      groups.push(await groupSummary(group, req.user._id, req.user));
     }
     res.json({ success: true, groups });
   } catch (error) {
@@ -1357,6 +1548,7 @@ const forwardMessage = async (req, res) => {
       const message = await ChatMessage.create({
         group: group._id,
         sender: req.user._id,
+        senderStudentId: studentCodeOf(req.user),
         type: source.attachments?.length ? 'media' : 'text',
         text: source.text || '',
         attachments: source.attachments || [],
@@ -1413,6 +1605,9 @@ module.exports = {
   createPoll,
   votePoll,
   getMediaGallery,
+  getPinnedResources,
+  getActivityLog,
+  translateMessage,
   reportMessage,
   inviteInfo,
   regenerateInvite,

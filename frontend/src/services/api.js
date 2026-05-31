@@ -8,6 +8,7 @@ const API = axios.create({
 });
 
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const BULK_IMPORT_TIMEOUT_MS = Number(import.meta.env.VITE_BULK_IMPORT_TIMEOUT_MS || 180000);
 const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
 const isRetryableRequest = (error) => {
   const method = String(error.config?.method || 'get').toLowerCase();
@@ -100,8 +101,8 @@ export const adminAPI = {
   getAuditLogs: (params) => API.get('/admin/audit-logs', { params }),
   getTeachers: (params) => API.get('/admin/teachers', { params }),
   createTeacher: (data) => API.post('/admin/teachers', data),
-  importTeachers: (formData, config = {}) => API.post('/admin/teachers/import', formData, { ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
-  importStudents: (formData, config = {}) => API.post('/admin/students/import', formData, { ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
+  importTeachers: (formData, config = {}) => API.post('/admin/teachers/import', formData, { timeout: BULK_IMPORT_TIMEOUT_MS, ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
+  importStudents: (formData, config = {}) => API.post('/admin/students/import', formData, { timeout: BULK_IMPORT_TIMEOUT_MS, ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
   bulkDeleteStudents: (data) => API.post('/admin/students/bulk-delete', data),
   deleteTeacher: (id) => API.delete(`/admin/teachers/${id}`),
   getTeacherAllocation: (params) => API.get('/admin/teachers/allocation', { params }),
@@ -148,7 +149,7 @@ export const lmsAPI = {
   addSubmissionComment: (submissionId, data) => API.post(`/lms/submissions/${submissionId}/comments`, data),
   createQuiz: (subjectId, data) => API.post(`/lms/subjects/${subjectId}/quizzes`, data),
   updateQuiz: (id, data) => API.put(`/lms/quizzes/${id}`, data),
-  importQuiz: (subjectId, formData) => API.post(`/lms/subjects/${subjectId}/quizzes/import`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  importQuiz: (subjectId, formData) => API.post(`/lms/subjects/${subjectId}/quizzes/import`, formData, { timeout: BULK_IMPORT_TIMEOUT_MS, headers: { 'Content-Type': 'multipart/form-data' } }),
   attemptQuiz: (quizId, data) => API.post(`/lms/quizzes/${quizId}/attempt`, data),
   releaseQuizResults: (quizId) => API.put(`/lms/quizzes/${quizId}/release-results`),
   getAssignmentAnalytics: (id) => API.get(`/lms/assignments/${id}/analytics`),
@@ -179,6 +180,8 @@ export const chatAPI = {
   uploadMedia: (groupId, formData, config = {}) => API.post(`/chat/groups/${groupId}/media`, formData, { ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
   createPoll: (groupId, data) => API.post(`/chat/groups/${groupId}/polls`, data),
   getGallery: (groupId) => API.get(`/chat/groups/${groupId}/gallery`),
+  getResources: (groupId) => API.get(`/chat/groups/${groupId}/resources`),
+  getActivityLog: (groupId) => API.get(`/chat/groups/${groupId}/activity`),
   getInvite: (groupId) => API.get(`/chat/groups/${groupId}/invite`),
   regenerateInvite: (groupId, data = {}) => API.post(`/chat/groups/${groupId}/invite/regenerate`, data),
   sendInvite: (groupId, data) => API.post(`/chat/groups/${groupId}/invite/send`, data),
@@ -208,6 +211,7 @@ export const chatAPI = {
   getReceipts: (messageId) => API.get(`/chat/messages/${messageId}/receipts`),
   pinMessage: (messageId, duration = 'always') => API.post(`/chat/messages/${messageId}/pin`, { duration }),
   markImportant: (messageId, important = true) => API.post(`/chat/messages/${messageId}/important`, { important }),
+  translateMessage: (messageId, targetLanguage = 'en') => API.post(`/chat/messages/${messageId}/translate`, { targetLanguage }),
   votePoll: (messageId, optionId) => API.post(`/chat/messages/${messageId}/vote`, { optionId }),
   reportMessage: (messageId, reason) => API.post(`/chat/messages/${messageId}/report`, { reason }),
 };
@@ -229,7 +233,7 @@ export const lectureAPI = {
 export const timetableAPI = {
   getAll: () => API.get('/timetables'),
   getMine: () => API.get('/timetables/my'),
-  save: (formData) => API.post('/timetables', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  save: (formData) => API.post('/timetables', formData, { timeout: BULK_IMPORT_TIMEOUT_MS, headers: { 'Content-Type': 'multipart/form-data' } }),
   generateLectures: (id, data) => API.post(`/timetables/${id}/generate-lectures`, data),
 };
 
@@ -245,7 +249,7 @@ export const attendanceAPI = {
   downloadSessionExcel: (params) => API.get('/attendance/session/download', { params, responseType: 'blob' }),
   getSubjectAnalytics: (subjectId) => API.get(`/attendance/analytics/subject/${subjectId}`),
   getSubjectHistory: (subjectId, params) => API.get(`/attendance/subject/${subjectId}/history`, { params }),
-  importSubjectAttendance: (subjectId, formData, config = {}) => API.post(`/attendance/subject/${subjectId}/import`, formData, { ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
+  importSubjectAttendance: (subjectId, formData, config = {}) => API.post(`/attendance/subject/${subjectId}/import`, formData, { timeout: BULK_IMPORT_TIMEOUT_MS, ...config, headers: { 'Content-Type': 'multipart/form-data', ...(config.headers || {}) } }),
   deleteImportedSubjectAttendance: (subjectId, data) => API.post(`/attendance/subject/${subjectId}/imported-delete`, data),
   createDispute: (data) => API.post('/attendance/disputes', data),
   getDisputes: (params) => API.get('/attendance/disputes', { params }),

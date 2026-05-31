@@ -28,6 +28,7 @@ const {
 } = require('../utils/restrictionPolicy');
 const { uploadFile, deleteImage } = require('../utils/cloudinary');
 const { invalidateLmsCache } = require('../utils/cacheInvalidation');
+const { studentCodeOf, studentIdentityFilter } = require('../utils/studentIdentity');
 
 const isStaff = (user) => ['admin', 'teacher'].includes(user?.role);
 const objectId = (id) => new mongoose.Types.ObjectId(id);
@@ -365,7 +366,7 @@ const notifyDirect = async (req, notifications = []) => {
   const studentRows = rows.filter(row => row.recipientRole === 'student' && row.recipient);
   const students = studentRows.length
     ? await User.find({ _id: { $in: studentRows.map(row => row.recipient) } })
-      .select('_id role status isRestricted subjectRestrictions')
+      .select('_id role status isRestricted subjectRestrictions studentId')
       .lean()
     : [];
   const studentsById = new Map(students.map(student => [String(student._id), student]));
@@ -378,6 +379,11 @@ const notifyDirect = async (req, notifications = []) => {
     return canReceiveSubjectUpdates(student, subjectId);
   });
   if (!deliverableRows.length) return [];
+  deliverableRows.forEach(row => {
+    if (row.recipientRole === 'student' && !row.recipientStudentId) {
+      row.recipientStudentId = studentCodeOf(studentsById.get(String(row.recipient)));
+    }
+  });
   const created = await Notification.insertMany(deliverableRows, { ordered: false });
   const io = req.app.get('io');
   if (io) {
@@ -451,8 +457,9 @@ const getSubjectAttendanceSummary = async (subject, user) => {
   };
 
   if (user.role === 'student') {
+    const studentFilter = studentIdentityFilter(user);
     const attended = lectureIds.length
-      ? await Attendance.countDocuments({ lecture: { $in: lectureIds }, student: user._id, status: { $in: ['present', 'late', 'excused'] } })
+      ? await Attendance.countDocuments({ lecture: { $in: lectureIds }, ...studentFilter, status: { $in: ['present', 'late', 'excused'] } })
       : 0;
     return {
       ...summary,
@@ -474,14 +481,15 @@ const getSubjectAttendanceSummary = async (subject, user) => {
   };
 };
 
-const buildSubjectProgress = async (subject, studentId = null) => {
+const buildSubjectProgress = async (subject, student = null) => {
+  const studentFilter = student ? studentIdentityFilter(student) : null;
   const [assignments, quizzes, materials, submissions, attempts, recentGrade] = await Promise.all([
     LmsAssignment.find({ subject: subject._id, isPublished: publishedFilter() }).select('_id title dueDate maxMarks').sort({ dueDate: 1, createdAt: -1 }).lean(),
     LmsQuiz.find({ subject: subject._id, isPublished: publishedFilter() }).select('_id title totalMarks').sort({ createdAt: -1 }).lean(),
     LmsMaterial.find({ subject: subject._id, isActive: true, isPublished: publishedFilter() }).select('_id title resourceType createdAt').sort({ createdAt: -1 }).limit(3).lean(),
-    studentId ? LmsSubmission.find({ subject: subject._id, student: studentId }).select('assignment status marks feedback gradedAt').lean() : [],
-    studentId ? LmsQuizAttempt.find({ subject: subject._id, student: studentId }).select('quiz score totalMarks submittedAt').lean() : [],
-    studentId ? LmsSubmission.findOne({ subject: subject._id, student: studentId, status: 'graded' }).select('assignment marks feedback gradedAt').sort({ gradedAt: -1 }).populate('assignment', 'title maxMarks').lean() : null
+    studentFilter ? LmsSubmission.find({ subject: subject._id, ...studentFilter }).select('assignment status marks feedback gradedAt').lean() : [],
+    studentFilter ? LmsQuizAttempt.find({ subject: subject._id, ...studentFilter }).select('quiz score totalMarks submittedAt').lean() : [],
+    studentFilter ? LmsSubmission.findOne({ subject: subject._id, ...studentFilter, status: 'graded' }).select('assignment marks feedback gradedAt').sort({ gradedAt: -1 }).populate('assignment', 'title maxMarks').lean() : null
   ]);
   const submittedAssignments = new Set(submissions.map(item => String(item.assignment)));
   const attemptedQuizzes = new Set(attempts.map(item => String(item.quiz)));
@@ -675,6 +683,7 @@ const getSubjectOverview = async (req, res) => {
       assignmentQuery.isPublished = publishedFilter();
       quizQuery.isPublished = publishedFilter();
     }
+    const currentStudentFilter = req.user.role === 'student' ? studentIdentityFilter(req.user) : null;
     const [materialsRaw, materialFolders, assignmentsRaw, quizzesRaw, announcements, submissions, attempts, discussions, attendanceSummary] = await Promise.all([
       LmsMaterial.find(materialQuery).sort({ createdAt: -1 }).populate('createdBy', 'name').lean(),
       LmsMaterialFolder.find({ subject: subject._id, isActive: true }).sort({ order: 1, createdAt: 1 }).lean(),
@@ -682,14 +691,14 @@ const getSubjectOverview = async (req, res) => {
       LmsQuiz.find(quizQuery).sort({ isPublished: 1, createdAt: -1 }).populate('createdBy', 'name'),
       LmsAnnouncement.find({ subject: subject._id }).sort({ createdAt: -1 }).populate('createdBy', 'name').lean(),
       req.user.role === 'student'
-        ? LmsSubmission.find({ subject: subject._id, student: req.user._id }).lean()
+        ? LmsSubmission.find({ subject: subject._id, ...currentStudentFilter }).lean()
         : LmsSubmission.find({ subject: subject._id }).populate('student', 'name studentId email').lean(),
       req.user.role === 'student'
-        ? LmsQuizAttempt.find({ subject: subject._id, student: req.user._id }).lean()
+        ? LmsQuizAttempt.find({ subject: subject._id, ...currentStudentFilter }).lean()
         : LmsQuizAttempt.find({ subject: subject._id }).populate('student', 'name studentId email').lean(),
       LmsDiscussion.find(
         req.user.role === 'student'
-          ? { subject: subject._id, student: req.user._id }
+          ? { subject: subject._id, ...currentStudentFilter }
           : { subject: subject._id }
       ).sort({ status: 1, updatedAt: -1 }).populate('student', 'name studentId').populate('lastReplyBy', 'name role').lean(),
       getSubjectAttendanceSummary(subject, req.user)
@@ -999,7 +1008,8 @@ const submitAssignment = async (req, res) => {
     if (!publicAssignmentForStudent(assignment)) return res.status(404).json({ success: false, message: 'Assignment not found' });
     const subject = await assertSubjectAccess(req, assignment.subject);
     if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Students only' });
-    const existingSubmission = await LmsSubmission.findOne({ assignment: assignment._id, student: req.user._id });
+    const currentStudentFilter = studentIdentityFilter(req.user);
+    const existingSubmission = await LmsSubmission.findOne({ assignment: assignment._id, ...currentStudentFilter });
     const dueAt = assignmentDueAt(assignment);
     const isLate = Boolean(dueAt && dueAt < new Date());
     if (isLate && !assignment.acceptLateSubmissions) {
@@ -1020,6 +1030,7 @@ const submitAssignment = async (req, res) => {
       assignment: assignment._id,
       subject: subject._id,
       student: req.user._id,
+      studentId: studentCodeOf(req.user),
       text: assignment.submissionMode === 'offline' ? 'Marked as submitted offline.' : (req.body.text || ''),
       fileUrl: firstAttachment?.url || '',
       fileName: firstAttachment?.fileName || '',
@@ -1136,8 +1147,8 @@ const markMaterialViewed = async (req, res) => {
     const subject = await assertSubjectAccess(req, material.subject);
     if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Students only' });
     const view = await LmsMaterialView.findOneAndUpdate(
-      { material: material._id, student: req.user._id },
-      { material: material._id, subject: subject._id, student: req.user._id, viewedAt: new Date() },
+      { material: material._id, ...studentIdentityFilter(req.user) },
+      { material: material._id, subject: subject._id, student: req.user._id, studentId: studentCodeOf(req.user), viewedAt: new Date() },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     emitLmsEvent(req, subject, 'lms_changed', { subjectId: subject._id, type: 'material_viewed', materialId: material._id });
@@ -1152,7 +1163,7 @@ const getSubmissionComments = async (req, res) => {
     const submission = await LmsSubmission.findById(req.params.submissionId).lean();
     if (!submission) return res.status(404).json({ success: false, message: 'Submission not found' });
     await assertSubjectAccess(req, submission.subject, isStaff(req.user) ? { staffOnly: true } : {});
-    if (req.user.role === 'student' && String(submission.student) !== String(req.user._id)) {
+    if (req.user.role === 'student' && String(submission.student) !== String(req.user._id) && String(submission.studentId || '').toUpperCase() !== studentCodeOf(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     const comments = await LmsPrivateComment.find({ submission: submission._id }).sort({ createdAt: 1 }).populate('author', 'name role studentId').lean();
@@ -1164,10 +1175,10 @@ const getSubmissionComments = async (req, res) => {
 
 const addSubmissionComment = async (req, res) => {
   try {
-    const submission = await LmsSubmission.findById(req.params.submissionId).populate('assignment').populate('student', 'name _id');
+    const submission = await LmsSubmission.findById(req.params.submissionId).populate('assignment').populate('student', 'name _id studentId');
     if (!submission) return res.status(404).json({ success: false, message: 'Submission not found' });
     const subject = await assertSubjectAccess(req, submission.subject, isStaff(req.user) ? { staffOnly: true } : {});
-    if (req.user.role === 'student' && String(submission.student?._id || submission.student) !== String(req.user._id)) {
+    if (req.user.role === 'student' && String(submission.student?._id || submission.student) !== String(req.user._id) && String(submission.studentId || submission.student?.studentId || '').toUpperCase() !== studentCodeOf(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     const comment = await LmsPrivateComment.create({
@@ -1333,7 +1344,7 @@ const attemptQuiz = async (req, res) => {
       await autoReleaseExpiredQuizzes(req, subject, [quiz]);
       return res.status(400).json({ success: false, message: 'Quiz is closed' });
     }
-    const existingAttempts = await LmsQuizAttempt.countDocuments({ quiz: quiz._id, student: req.user._id });
+    const existingAttempts = await LmsQuizAttempt.countDocuments({ quiz: quiz._id, ...studentIdentityFilter(req.user) });
     if (existingAttempts >= Number(quiz.attemptLimit || 1)) {
       return res.status(409).json({ success: false, message: 'Quiz is already submitted and cannot be edited.' });
     }
@@ -1367,6 +1378,7 @@ const attemptQuiz = async (req, res) => {
       quiz: quiz._id,
       subject: subject._id,
       student: req.user._id,
+      studentId: studentCodeOf(req.user),
       answers: normalizedAnswers,
       score,
       totalMarks: quiz.totalMarks,
@@ -1687,14 +1699,15 @@ const getStudentProgress = async (req, res) => {
       .lean();
     const visibleSubjects = subjects.filter(subject => !isRestrictedForSubject(student, subject._id));
     const visibleSubjectIds = visibleSubjects.map(subject => subject._id);
+    const currentStudentFilter = studentIdentityFilter(req.user);
     const [assignments, submissions, quizzes, attempts, materials, discussions, subjectProgress] = await Promise.all([
       LmsAssignment.countDocuments({ subject: { $in: visibleSubjectIds }, isPublished: publishedFilter() }),
-      LmsSubmission.countDocuments({ subject: { $in: visibleSubjectIds }, student: req.user._id }),
+      LmsSubmission.countDocuments({ subject: { $in: visibleSubjectIds }, ...currentStudentFilter }),
       LmsQuiz.countDocuments({ subject: { $in: visibleSubjectIds }, isPublished: publishedFilter() }),
-      LmsQuizAttempt.countDocuments({ subject: { $in: visibleSubjectIds }, student: req.user._id }),
+      LmsQuizAttempt.countDocuments({ subject: { $in: visibleSubjectIds }, ...currentStudentFilter }),
       LmsMaterial.countDocuments({ subject: { $in: visibleSubjectIds }, isActive: true, isPublished: publishedFilter() }),
-      LmsDiscussion.countDocuments({ subject: { $in: visibleSubjectIds }, student: req.user._id, status: 'open' }),
-      Promise.all(visibleSubjects.map(subject => buildSubjectProgress(subject, req.user._id)))
+      LmsDiscussion.countDocuments({ subject: { $in: visibleSubjectIds }, ...currentStudentFilter, status: 'open' }),
+      Promise.all(visibleSubjects.map(subject => buildSubjectProgress(subject, req.user)))
     ]);
     const recentMaterials = await LmsMaterial.find({ subject: { $in: visibleSubjectIds }, isActive: true, isPublished: publishedFilter() })
       .sort({ createdAt: -1 })
@@ -1781,7 +1794,7 @@ const getDiscussions = async (req, res) => {
   try {
     await assertSubjectAccess(req, req.params.subjectId);
     const query = req.user.role === 'student'
-      ? { subject: req.params.subjectId, student: req.user._id }
+      ? { subject: req.params.subjectId, ...studentIdentityFilter(req.user) }
       : { subject: req.params.subjectId };
     const discussions = await LmsDiscussion.find(query)
       .sort({ status: 1, updatedAt: -1 })
@@ -1810,6 +1823,7 @@ const createDiscussion = async (req, res) => {
     const discussion = await LmsDiscussion.create({
       subject: subject._id,
       student: req.user._id,
+      studentId: studentCodeOf(req.user),
       title: req.body.title,
       message: req.body.message
     });

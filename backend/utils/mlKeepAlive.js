@@ -17,12 +17,13 @@ const startMlKeepAlive = () => {
     return null;
   }
 
-  const intervalMs = Math.max(Number(process.env.ML_KEEPALIVE_INTERVAL_MS || 60000), 60000);
-  const timeoutMs = Math.max(Number(process.env.ML_KEEPALIVE_TIMEOUT_MS || 10000), 3000);
+  const intervalMs = Math.max(Number(process.env.ML_KEEPALIVE_INTERVAL_MS || 30000), 30000);
+  const timeoutMs = Math.max(Number(process.env.ML_KEEPALIVE_TIMEOUT_MS || 45000), 5000);
   let running = false;
+  let stopped = false;
 
   const ping = async () => {
-    if (running) return;
+    if (stopped || running) return;
     running = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -38,7 +39,12 @@ const startMlKeepAlive = () => {
         console.warn(`ML keep-alive returned ${response.status} for ${healthUrl}`);
       }
     } catch (error) {
-      console.warn(`ML keep-alive failed: ${error.message}`);
+      const abortedByTimeout = error.name === 'AbortError' || /aborted|abort/i.test(String(error.message || ''));
+      if (abortedByTimeout) {
+        console.warn(`ML keep-alive timed out after ${timeoutMs}ms. Retrying on the next ping.`);
+      } else {
+        console.warn(`ML keep-alive failed: ${error.message}`);
+      }
     } finally {
       clearTimeout(timeout);
       running = false;
@@ -50,7 +56,11 @@ const startMlKeepAlive = () => {
   const interval = setInterval(ping, intervalMs);
   interval.unref?.();
   console.log(`ML keep-alive enabled: ${healthUrl} every ${Math.round(intervalMs / 1000)}s`);
-  return interval;
+  return () => {
+    stopped = true;
+    clearTimeout(firstPing);
+    clearInterval(interval);
+  };
 };
 
 module.exports = { startMlKeepAlive };

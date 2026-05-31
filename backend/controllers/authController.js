@@ -641,8 +641,8 @@ const register = async (req, res) => {
 // @desc    Login user
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const identifier = String(email || '').trim();
+    const { email, studentId, identifier: rawIdentifier, password } = req.body;
+    const identifier = String(rawIdentifier || email || studentId || '').trim();
     if (!identifier || !password) {
       return res.status(400).json({ success: false, message: 'Email/Student ID and password are required' });
     }
