@@ -20,21 +20,27 @@ const boxToPercent = (box, video, mirrored = false) => {
 
 export default function DynamicFaceGuide({ box, videoRef, ready = false, mirrored = false, scanning = true }) {
   const style = boxToPercent(box, videoRef?.current?.video || videoRef?.current, mirrored);
+  const guideClass = ready ? 'face-scan-ready' : 'face-scan-active';
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div className="face-scan-layer pointer-events-none absolute inset-0 overflow-hidden">
       {scanning && (
-        <div className="absolute inset-x-6 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-transparent via-primary-300/80 to-transparent shadow-[0_0_18px_rgba(96,165,250,0.7)] motion-safe:animate-pulse" />
+        <>
+          <div className={`face-scan-focus ${guideClass}`} />
+          <div className={`face-scan-beam ${guideClass}`} />
+          <div className="face-scan-grid" />
+        </>
       )}
       {style && (
         <div
-          className={`absolute rounded-xl border-2 transition-all duration-150 ${
+          className={`face-scan-box ${guideClass} absolute rounded-xl border-2 transition-all duration-150 ${
             ready
               ? 'border-emerald-300 shadow-[0_0_26px_rgba(52,211,153,0.42)]'
               : 'border-primary-300 shadow-[0_0_22px_rgba(96,165,250,0.36)]'
           }`}
           style={style}
         >
+          {scanning && <span className={`face-scan-box-beam ${guideClass}`} />}
           <span className="absolute -left-1 -top-1 h-4 w-4 rounded-tl-xl border-l-4 border-t-4 border-current" />
           <span className="absolute -right-1 -top-1 h-4 w-4 rounded-tr-xl border-r-4 border-t-4 border-current" />
           <span className="absolute -bottom-1 -left-1 h-4 w-4 rounded-bl-xl border-b-4 border-l-4 border-current" />
