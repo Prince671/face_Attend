@@ -137,10 +137,14 @@ export default function AdminStudents() {
     socket.on('student_profile_changed', fetchData);
     socket.on('student_profile_update_requested', fetchData);
     socket.on('new_registration', fetchData);
+    socket.on('account_status_changed', fetchData);
+    socket.on('pending_deletions_changed', fetchData);
     return () => {
       socket.off('student_profile_changed', fetchData);
       socket.off('student_profile_update_requested', fetchData);
       socket.off('new_registration', fetchData);
+      socket.off('account_status_changed', fetchData);
+      socket.off('pending_deletions_changed', fetchData);
     };
   }, [socket, fetchData]);
 

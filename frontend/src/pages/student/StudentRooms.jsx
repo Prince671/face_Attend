@@ -102,9 +102,21 @@ const emojiCategories = [
 const CHAT_MAX_FILES = 10;
 const CHAT_MAX_FILE_SIZE = 50 * 1024 * 1024;
 const CHAT_BLOCKED_EXTENSIONS = ['.exe', '.bat', '.cmd', '.ps1', '.sh', '.msi', '.dll'];
+const roomBusyLabels = {
+  createGroup: 'Creating room...',
+  avatar: 'Updating group image...',
+  saveGroup: 'Saving group changes...',
+  presence: 'Saving privacy setting...',
+  loadInvite: 'Creating invite...',
+  saveInvite: 'Saving invite controls...',
+  regenerateInvite: 'Resetting invite link...',
+  copyInvite: 'Copying invite link...',
+  joinRequests: 'Loading join requests...',
+};
 
 const fileUrl = (url = '') => url?.startsWith('http') ? url : url;
 const initials = (name = '') => name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase() || '?';
+const normalizeGroupName = (value = '') => String(value || '').trim().replace(/\s+/g, ' ');
 const tempMessageId = () => `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const formatTime = (value) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 const formatDateTime = (value) => value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -718,6 +730,7 @@ export default function StudentRooms() {
   const longPressRef = useRef(null);
   const undoTimerRef = useRef(null);
   const attachmentInputRef = useRef(null);
+  const groupAvatarInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const discardRecordingRef = useRef(false);
@@ -742,6 +755,17 @@ export default function StudentRooms() {
     !message.isDeletedForMe &&
     String(message.sender?._id) === String(user?._id)
   ));
+
+  useEffect(() => {
+    if (!roomActionBusy) {
+      window.dispatchEvent(new CustomEvent('app:busy', { detail: { active: false, label: '' } }));
+      return undefined;
+    }
+    window.dispatchEvent(new CustomEvent('app:busy', {
+      detail: { active: true, label: roomBusyLabels[roomActionBusy] || 'Processing room action...' },
+    }));
+    return () => window.dispatchEvent(new CustomEvent('app:busy', { detail: { active: false, label: '' } }));
+  }, [roomActionBusy]);
   const isGroupAdmin = myMembership?.role === 'admin';
   const activeInviteCode = invite?.inviteCode || activeGroup?.inviteCode || '';
   const activeInviteLink = inviteLinkForCode(activeInviteCode);
@@ -757,6 +781,9 @@ export default function StudentRooms() {
     Boolean(infoDraft.hidePresence) !== Boolean(activeGroup.myPrefs?.hidePresence) ||
     Object.keys(defaultPermissions).some(key => infoDraft.permissions?.[key] !== activePermissions[key])
   );
+  const groupNameChanged = activeGroup && normalizeGroupName(infoDraft.name).toLowerCase() !== normalizeGroupName(activeGroup.name).toLowerCase();
+  const saveGroupBusyText = groupNameChanged ? 'Renaming group' : 'Saving changes';
+  const saveGroupIdleText = groupNameChanged ? 'Rename group' : 'Save changes';
   const pinnedGroupIds = useMemo(() => new Set(chatPrefs.pinned || []), [chatPrefs.pinned]);
   const hiddenGroupIds = useMemo(() => new Set(chatPrefs.hidden || []), [chatPrefs.hidden]);
   const archivedGroupIds = useMemo(() => new Set(chatPrefs.archived || []), [chatPrefs.archived]);
@@ -1335,9 +1362,16 @@ export default function StudentRooms() {
 
   const handleCreateGroup = async (event) => {
     event.preventDefault();
+    const nextName = normalizeGroupName(groupForm.name);
+    if (!nextName) return toast.error('Group name is required');
+    if (groups.some(group => normalizeGroupName(group.name).toLowerCase() === nextName.toLowerCase())) {
+      return toast.error('A room with this name already exists. Choose a unique group name.');
+    }
+    setRoomActionBusy('createGroup');
     try {
       const res = await chatAPI.createGroup({
         ...groupForm,
+        name: nextName,
         memberIds: selectedMembers.map(member => member._id),
       });
       setGroups(current => [res.data.group, ...current.filter(group => group._id !== res.data.group._id)]);
@@ -1347,6 +1381,8 @@ export default function StudentRooms() {
       toast.success('Room created');
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not create room');
+    } finally {
+      setRoomActionBusy(current => current === 'createGroup' ? '' : current);
     }
   };
 
@@ -1591,8 +1627,13 @@ export default function StudentRooms() {
 
   const saveGroupInfo = async () => {
     if (!activeGroup || !canManageGroup || !infoDirty) return;
+    const nextName = normalizeGroupName(infoDraft.name);
+    if (!nextName) return toast.error('Group name is required');
+    if (groups.some(group => String(group._id) !== String(activeGroup._id) && normalizeGroupName(group.name).toLowerCase() === nextName.toLowerCase())) {
+      return toast.error('A room with this name already exists. Choose a unique group name.');
+    }
     const saved = await updateGroup({
-      name: infoDraft.name.trim(),
+      name: nextName,
       chatMode: infoDraft.chatMode,
       autoDeleteAfterHours: Number(infoDraft.autoDeleteAfterHours || 0),
       inviteEnabled: infoDraft.inviteEnabled,
@@ -1948,12 +1989,15 @@ export default function StudentRooms() {
     if (!file || !activeGroup || !canManageGroup) return;
     const form = new FormData();
     form.append('avatar', file);
+    setRoomActionBusy('avatar');
     try {
       const res = await chatAPI.updateGroupAvatar(activeGroup._id, form);
       setGroups(current => current.map(group => group._id === activeGroup._id ? res.data.group : group));
       toast.success('Group image updated');
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not update group image');
+    } finally {
+      setRoomActionBusy(current => current === 'avatar' ? '' : current);
     }
   };
 
@@ -2762,15 +2806,33 @@ export default function StudentRooms() {
                     <div className="mx-auto w-full max-w-4xl space-y-2.5 sm:space-y-4">
                       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:rounded-2xl sm:p-4">
                         <div className="flex items-center gap-3 sm:gap-4">
-                          <label className={`relative ${canManageGroup ? 'cursor-pointer' : ''}`}>
-                            <GroupAvatar group={activeGroup} className="h-14 w-14 sm:h-20 sm:w-20" />
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() => setFullScreenMedia({ kind: 'group-avatar', group: activeGroup, name: `${activeGroup.name || 'Room'} profile image` })}
+                              className="block rounded-full focus:outline-none focus:ring-2 focus:ring-primary-300/70"
+                              aria-label="Open group profile image"
+                            >
+                              <GroupAvatar group={activeGroup} className="h-14 w-14 sm:h-20 sm:w-20" />
+                            </button>
                             {canManageGroup && (
-                              <span className="absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border border-white/10 bg-primary-500 text-white shadow-lg sm:h-7 sm:w-7">
-                                <ImageIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                              <button
+                                type="button"
+                                onClick={() => groupAvatarInputRef.current?.click()}
+                                disabled={Boolean(roomActionBusy)}
+                                className="absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border border-white/10 bg-primary-500 text-white shadow-lg transition hover:bg-primary-400 disabled:cursor-wait disabled:opacity-70 sm:h-7 sm:w-7"
+                                aria-label="Change group image"
+                              >
+                                {roomActionBusy === 'avatar' ? <Loader2 className="h-3 w-3 animate-spin sm:h-3.5 sm:w-3.5" /> : <ImageIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5" />}
+                              </button>
+                            )}
+                            {roomActionBusy === 'avatar' && (
+                              <span className="absolute inset-0 grid place-items-center rounded-full bg-slate-950/55 text-[10px] font-semibold text-primary-100 backdrop-blur-[1px] sm:text-xs">
+                                <Loader2 className="h-4 w-4 animate-spin" />
                               </span>
                             )}
-                            {canManageGroup && <input type="file" accept="image/*" className="hidden" onChange={event => uploadGroupAvatar(event.target.files?.[0])} />}
-                          </label>
+                            {canManageGroup && <input ref={groupAvatarInputRef} type="file" accept="image/*" className="hidden" disabled={Boolean(roomActionBusy)} onChange={event => { uploadGroupAvatar(event.target.files?.[0]); event.target.value = ''; }} />}
+                          </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               {editingGroupName ? (
@@ -2784,7 +2846,7 @@ export default function StudentRooms() {
                               <div className="mt-2 flex flex-wrap gap-1.5 sm:mt-3 sm:gap-2">
                                 <button type="button" disabled={!infoDraft.name.trim() || roomActionBusy === 'saveGroup'} onClick={saveGroupInfo} className="btn-primary h-8 w-8 justify-center p-0 text-xs disabled:opacity-50 sm:h-auto sm:w-auto sm:px-4 sm:py-2" aria-label="Save changes">
                                   {roomActionBusy === 'saveGroup' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                                  <span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? 'Saving changes' : 'Save changes'}</span>
+                                  <span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? saveGroupBusyText : saveGroupIdleText}</span>
                                 </button>
                                 <button type="button" onClick={discardGroupInfoChanges} className="btn-secondary h-8 w-8 justify-center p-0 text-xs sm:h-auto sm:w-auto sm:px-4 sm:py-2" aria-label="Cancel changes"><X className="h-4 w-4" /><span className="hidden sm:inline">Cancel</span></button>
                               </div>
@@ -2846,7 +2908,7 @@ export default function StudentRooms() {
                             </label>
                             <button type="button" disabled={!infoDirty || !infoDraft.name.trim() || roomActionBusy === 'saveGroup'} onClick={saveGroupInfo} className="btn-primary h-9 justify-center text-xs disabled:opacity-50 sm:h-auto sm:text-sm">
                               {roomActionBusy === 'saveGroup' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                              <span>{roomActionBusy === 'saveGroup' ? 'Saving' : 'Save'}</span><span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? ' changes' : ' changes'}</span>
+                              <span>{roomActionBusy === 'saveGroup' ? (groupNameChanged ? 'Renaming' : 'Saving') : (groupNameChanged ? 'Rename' : 'Save')}</span><span className="hidden sm:inline">{roomActionBusy === 'saveGroup' ? (groupNameChanged ? ' group' : ' changes') : (groupNameChanged ? ' group' : ' changes')}</span>
                             </button>
                           </div>
                         )}
@@ -3596,29 +3658,29 @@ export default function StudentRooms() {
         </section>
       </div>
 
-      <FeaturePanel open={showCreate} title="Create Room" onClose={() => setShowCreate(false)}>
+      <FeaturePanel open={showCreate} title="Create Room" onClose={() => { if (roomActionBusy !== 'createGroup') setShowCreate(false); }}>
         <form onSubmit={handleCreateGroup} className="space-y-4">
-          <input className="input-field" placeholder="Group name" value={groupForm.name} onChange={e => setGroupForm({ ...groupForm, name: e.target.value })} required />
-          <textarea className="input-field min-h-20" placeholder="Description optional" value={groupForm.description} onChange={e => setGroupForm({ ...groupForm, description: e.target.value })} />
-          <select className="input-field" value={groupForm.chatMode} onChange={e => setGroupForm({ ...groupForm, chatMode: e.target.value })}>
+          <input className="input-field" placeholder="Group name" value={groupForm.name} disabled={roomActionBusy === 'createGroup'} onChange={e => setGroupForm({ ...groupForm, name: e.target.value })} required />
+          <textarea className="input-field min-h-20" placeholder="Description optional" value={groupForm.description} disabled={roomActionBusy === 'createGroup'} onChange={e => setGroupForm({ ...groupForm, description: e.target.value })} />
+          <select className="input-field" value={groupForm.chatMode} disabled={roomActionBusy === 'createGroup'} onChange={e => setGroupForm({ ...groupForm, chatMode: e.target.value })}>
             <option value="everyone">Everyone can send</option>
             <option value="admins_only">Only admins can send</option>
           </select>
           <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-slate-200">
-            <input type="checkbox" checked={groupForm.addAll} onChange={e => setGroupForm({ ...groupForm, addAll: e.target.checked })} />
+            <input type="checkbox" checked={groupForm.addAll} disabled={roomActionBusy === 'createGroup'} onChange={e => setGroupForm({ ...groupForm, addAll: e.target.checked })} />
             Add all students of my semester
           </label>
           {!groupForm.addAll && (
             <div>
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <input className="input-field pl-9" placeholder="Search by name or student ID" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
+                <input className="input-field pl-9" placeholder="Search by name or student ID" value={studentSearch} disabled={roomActionBusy === 'createGroup'} onChange={e => setStudentSearch(e.target.value)} />
               </div>
               <div className="max-h-64 space-y-1 overflow-y-auto rounded-xl border border-white/10 p-2">
                 {studentOptions.map(student => (
-                  <button key={student._id} type="button" onClick={() => {
+                  <button key={student._id} type="button" disabled={roomActionBusy === 'createGroup'} onClick={() => {
                     setSelectedMembers(current => selectedIds.has(student._id) ? current.filter(item => item._id !== student._id) : [...current, student]);
-                  }} className={`flex w-full items-center gap-3 rounded-xl p-2 text-left ${selectedIds.has(student._id) ? 'bg-primary-500/15' : 'hover:bg-white/5'}`}>
+                  }} className={`flex w-full items-center gap-3 rounded-xl p-2 text-left disabled:cursor-wait disabled:opacity-70 ${selectedIds.has(student._id) ? 'bg-primary-500/15' : 'hover:bg-white/5'}`}>
                     <Avatar user={student} className="h-9 w-9" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-white">{student.name}</p>
@@ -3630,7 +3692,10 @@ export default function StudentRooms() {
               </div>
             </div>
           )}
-          <button className="btn-primary w-full" type="submit">Create Room</button>
+          <button className="btn-primary w-full justify-center disabled:cursor-wait disabled:opacity-70" type="submit" disabled={roomActionBusy === 'createGroup' || !normalizeGroupName(groupForm.name)}>
+            {roomActionBusy === 'createGroup' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+            {roomActionBusy === 'createGroup' ? 'Creating room...' : 'Create Room'}
+          </button>
         </form>
       </FeaturePanel>
 
@@ -3971,7 +4036,12 @@ export default function StudentRooms() {
 
       <FeaturePanel open={Boolean(fullScreenMedia)} title={fullScreenMedia?.name || 'Media'} onClose={() => setFullScreenMedia(null)} wide>
         <div className="wa-chat-bg flex min-h-[calc(100dvh-10rem)] items-center justify-center p-3">
-          {fullScreenMedia?.kind === 'video' ? (
+          {fullScreenMedia?.kind === 'group-avatar' ? (
+            <div className="grid place-items-center gap-4">
+              <GroupAvatar group={fullScreenMedia.group || activeGroup} className="h-56 w-56 text-5xl shadow-2xl sm:h-80 sm:w-80" />
+              <p className="max-w-xs truncate text-center text-sm font-semibold text-slate-200">{fullScreenMedia.group?.name || activeGroup?.name || 'Room'}</p>
+            </div>
+          ) : fullScreenMedia?.kind === 'video' ? (
             <video src={fileUrl(fullScreenMedia?.url)} controls autoPlay className="max-h-[92dvh] max-w-full rounded-xl" />
           ) : (
             <img src={fileUrl(fullScreenMedia?.url)} alt={fullScreenMedia?.name || 'Media'} className="max-h-[92dvh] max-w-full rounded-xl object-contain" />

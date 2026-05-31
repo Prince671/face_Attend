@@ -2,20 +2,39 @@ import React from 'react';
 
 const boxToPercent = (box, video, mirrored = false) => {
   if (!box || !video) return null;
+  const source = box.boundingBox || box;
   const videoWidth = video.videoWidth || 640;
   const videoHeight = video.videoHeight || 480;
-  const paddedWidth = box.width * 1.16;
-  const paddedHeight = box.height * 1.18;
-  const centerX = box.x + box.width / 2;
-  const centerY = box.y + box.height / 2;
+  const rawX = Number.isFinite(Number(source.x)) ? Number(source.x) : Number(source.left);
+  const rawY = Number.isFinite(Number(source.y)) ? Number(source.y) : Number(source.top);
+  const rawWidth = Number.isFinite(Number(source.width))
+    ? Number(source.width)
+    : Number(source.right) - rawX;
+  const rawHeight = Number.isFinite(Number(source.height))
+    ? Number(source.height)
+    : Number(source.bottom) - rawY;
+
+  if (![rawX, rawY, rawWidth, rawHeight].every(Number.isFinite) || rawWidth <= 0 || rawHeight <= 0) {
+    return null;
+  }
+
+  const paddedWidth = rawWidth * 1.12;
+  const paddedHeight = rawHeight * 1.16;
+  const centerX = rawX + rawWidth / 2;
+  const centerY = rawY + rawHeight / 2;
   const x = centerX - paddedWidth / 2;
   const y = centerY - paddedHeight / 2;
-  const left = mirrored ? 100 - ((x + paddedWidth) / videoWidth) * 100 : (x / videoWidth) * 100;
+  const widthPercent = Math.max(12, Math.min(82, (paddedWidth / videoWidth) * 100));
+  const heightPercent = Math.max(14, Math.min(82, (paddedHeight / videoHeight) * 100));
+  const rawLeft = mirrored ? 100 - ((x + paddedWidth) / videoWidth) * 100 : (x / videoWidth) * 100;
+  const left = Math.max(0, Math.min(100 - widthPercent, rawLeft));
+  const top = Math.max(0, Math.min(100 - heightPercent, (y / videoHeight) * 100));
+
   return {
-    left: `${Math.max(0, Math.min(100, left))}%`,
-    top: `${Math.max(0, Math.min(100, (y / videoHeight) * 100))}%`,
-    width: `${Math.max(10, Math.min(82, (paddedWidth / videoWidth) * 100))}%`,
-    height: `${Math.max(12, Math.min(82, (paddedHeight / videoHeight) * 100))}%`
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${widthPercent}%`,
+    height: `${heightPercent}%`
   };
 };
 

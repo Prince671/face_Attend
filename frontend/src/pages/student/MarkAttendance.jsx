@@ -11,7 +11,7 @@ import { SkeletonLine } from '../../components/LoadingStates';
 import DynamicFaceGuide from '../../components/DynamicFaceGuide';
 
 const STEPS = { CODE: 'code', CAMERA: 'camera', VERIFYING: 'verifying', SUCCESS: 'success', ERROR: 'error' };
-const AUTO_CAPTURE_READY_FRAMES = 1;
+const AUTO_CAPTURE_READY_FRAMES = 2;
 const ML_GUIDE_PROBE_BACKOFF_MS = 5000;
 const PASSPORT_WIDTH = 360;
 const PASSPORT_HEIGHT = 480;
@@ -94,13 +94,13 @@ export default function MarkAttendance() {
     return next;
   }, []);
 
-  const getPassportCropFromVideo = useCallback((box) => {
+  const getPassportCropFromVideo = useCallback((box, options = {}) => {
     const video = webcamRef.current?.video;
     if (!video || video.readyState < 2) return webcamRef.current?.getScreenshot();
 
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
-    const faceBox = box || lastFaceBox.current;
+    const faceBox = options.ignoreLastFaceBox ? null : (box || lastFaceBox.current);
     let crop;
 
     if (faceBox) {
@@ -142,6 +142,31 @@ export default function MarkAttendance() {
     ctx.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, PASSPORT_WIDTH, PASSPORT_HEIGHT);
     return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
   }, [clampCrop]);
+
+  const mlFaceLocationToVideoBox = useCallback((faceLocation) => {
+    const video = webcamRef.current?.video;
+    if (!video || video.readyState < 2 || !Array.isArray(faceLocation) || faceLocation.length < 4) return null;
+    const [top, right, bottom, left] = faceLocation.map(Number);
+    if ([top, right, bottom, left].some(value => !Number.isFinite(value))) return null;
+
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const cropWidth = Math.min(sourceWidth, sourceHeight * (PASSPORT_WIDTH / PASSPORT_HEIGHT));
+    const cropHeight = cropWidth * (PASSPORT_HEIGHT / PASSPORT_WIDTH);
+    const crop = {
+      x: (sourceWidth - cropWidth) / 2,
+      y: (sourceHeight - cropHeight) / 2,
+      width: cropWidth,
+      height: cropHeight
+    };
+
+    return {
+      x: crop.x + (left / PASSPORT_WIDTH) * crop.width,
+      y: crop.y + (top / PASSPORT_HEIGHT) * crop.height,
+      width: ((right - left) / PASSPORT_WIDTH) * crop.width,
+      height: ((bottom - top) / PASSPORT_HEIGHT) * crop.height
+    };
+  }, []);
 
   const sleep = useCallback((ms) => new Promise(resolve => window.setTimeout(resolve, ms)), []);
 
@@ -206,7 +231,7 @@ export default function MarkAttendance() {
     }
     if (guideProbeInProgress.current) return { pending: true, ready: false };
 
-    const guideFrame = getPassportCropFromVideo();
+    const guideFrame = getPassportCropFromVideo(null, { ignoreLastFaceBox: true });
     if (!guideFrame) return { ready: false, message: 'Camera frame is not ready yet' };
 
     guideProbeInProgress.current = true;
@@ -331,12 +356,17 @@ export default function MarkAttendance() {
         }
 
         autoCaptureFrames.current += 1;
+        const mlBox = mlFaceLocationToVideoBox(probe.faceLocation);
+        if (mlBox) {
+          lastFaceBox.current = mlBox;
+          setDetectedFaceBox(mlBox);
+        }
         setAutoCaptureReady(true);
         setAutoCaptureStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
-          capture(true);
+          capture(true, mlBox);
         }
         return;
       }
@@ -388,12 +418,17 @@ export default function MarkAttendance() {
         }
 
         autoCaptureFrames.current += 1;
+        const mlBox = mlFaceLocationToVideoBox(probe.faceLocation);
+        if (mlBox) {
+          lastFaceBox.current = mlBox;
+          setDetectedFaceBox(mlBox);
+        }
         setAutoCaptureReady(true);
         setAutoCaptureStatus('Face detected. Hold still...');
         if (autoCaptureFrames.current >= AUTO_CAPTURE_READY_FRAMES) {
           window.clearInterval(autoCaptureTimer.current);
           autoCaptureTimer.current = null;
-          capture(true);
+          capture(true, mlBox);
         }
       }
     }, detectionIntervalMs);
@@ -402,7 +437,7 @@ export default function MarkAttendance() {
       if (autoCaptureTimer.current) window.clearInterval(autoCaptureTimer.current);
       autoCaptureTimer.current = null;
     };
-  }, [cameraReady, capture, capturedImage, isFaceInsideGuide, probeGuideFaceWithML, step]);
+  }, [cameraReady, capture, capturedImage, isFaceInsideGuide, mlFaceLocationToVideoBox, probeGuideFaceWithML, step]);
 
   const handleCodeSubmit = (e) => {
     e.preventDefault();
@@ -631,7 +666,6 @@ export default function MarkAttendance() {
                     />
                     {cameraReady && (
                       <>
-                        <div className="camera-overlay" />
                         <DynamicFaceGuide box={detectedFaceBox} videoRef={webcamRef} ready={autoCaptureReady} scanning={!capturedImage} />
                       </>
                     )}

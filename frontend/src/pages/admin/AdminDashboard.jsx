@@ -619,14 +619,36 @@ export default function AdminDashboard() {
     socket.on('new_registration', fetchDashboard);
     socket.on('student_profile_changed', fetchDashboard);
     socket.on('student_profile_update_requested', fetchDashboard);
+    socket.on('teacher_changed', fetchDashboard);
+    socket.on('subject_updated', fetchDashboard);
+    socket.on('new_lecture', fetchDashboard);
+    socket.on('lecture_updated', fetchDashboard);
+    socket.on('lectures_changed', fetchDashboard);
+    socket.on('attendance_opened', fetchDashboard);
+    socket.on('attendance_closed', fetchDashboard);
+    socket.on('attendance_updated', fetchDashboard);
+    socket.on('attendance_marked', fetchDashboard);
+    socket.on('timetable_changed', fetchDashboard);
+    socket.on('holiday_changed', fetchDashboard);
     socket.on('lms_changed', fetchDashboard);
     return () => {
       socket.off('new_registration', fetchDashboard);
       socket.off('student_profile_changed', fetchDashboard);
       socket.off('student_profile_update_requested', fetchDashboard);
+      socket.off('teacher_changed', fetchDashboard);
+      socket.off('subject_updated', fetchDashboard);
+      socket.off('new_lecture', fetchDashboard);
+      socket.off('lecture_updated', fetchDashboard);
+      socket.off('lectures_changed', fetchDashboard);
+      socket.off('attendance_opened', fetchDashboard);
+      socket.off('attendance_closed', fetchDashboard);
+      socket.off('attendance_updated', fetchDashboard);
+      socket.off('attendance_marked', fetchDashboard);
+      socket.off('timetable_changed', fetchDashboard);
+      socket.off('holiday_changed', fetchDashboard);
       socket.off('lms_changed', fetchDashboard);
     };
-  }, [socket, user?.role]);
+  }, [socket, user?.role, analyticsDate, lectureSemester, lectureSubjectId]);
 
   if (isSuperAdminUser(user)) return <SuperAdminDashboard user={user} />;
 

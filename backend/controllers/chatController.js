@@ -23,6 +23,17 @@ const messageSelect = 'name studentId profileImage role';
 const memberSelect = 'name studentId profileImage department branch semester status isRestricted';
 
 const normalizeBranch = (value) => String(value || '').trim();
+const normalizeGroupName = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+const groupNameTaken = async (name, excludeGroupId = null) => {
+  const normalized = normalizeGroupName(name);
+  if (!normalized) return false;
+  const query = {
+    name: new RegExp(`^${escapeRegex(normalized)}$`, 'i'),
+    isDeleted: { $ne: true },
+  };
+  if (excludeGroupId) query._id = { $ne: excludeGroupId };
+  return Boolean(await ChatGroup.exists(query));
+};
 const activeSemesterStudentQuery = (base, extra = {}) => ({
   role: 'student',
   status: 'active',
@@ -388,8 +399,11 @@ const searchStudents = async (req, res) => {
 const createGroup = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
-    const name = String(req.body.name || '').trim();
+    const name = normalizeGroupName(req.body.name);
     if (!name) return res.status(400).json({ success: false, message: 'Group name is required.' });
+    if (await groupNameTaken(name)) {
+      return res.status(409).json({ success: false, message: 'A room with this name already exists. Choose a unique group name.' });
+    }
     const addAll = req.body.addAll === true;
     const requestedIds = validObjectIds(Array.isArray(req.body.memberIds) ? req.body.memberIds : []);
     const base = memberBase(req.user);
@@ -540,7 +554,14 @@ const updateGroup = async (req, res) => {
     const { group, membership } = await assertMember(req, req.params.groupId);
     if (!canUsePermission(group, membership, 'editInfo') && !(await canManageRoom(group, membership))) return res.status(403).json({ success: false, message: 'Only permitted members can update this room.' });
     const beforeSettings = groupSettingSnapshot(group);
-    if (req.body.name !== undefined) group.name = String(req.body.name || '').trim() || group.name;
+    if (req.body.name !== undefined) {
+      const nextName = normalizeGroupName(req.body.name);
+      if (!nextName) return res.status(400).json({ success: false, message: 'Group name is required.' });
+      if (nextName.toLowerCase() !== String(group.name || '').trim().toLowerCase() && await groupNameTaken(nextName, group._id)) {
+        return res.status(409).json({ success: false, message: 'A room with this name already exists. Choose a unique group name.' });
+      }
+      group.name = nextName;
+    }
     if (req.body.description !== undefined) group.description = String(req.body.description || '').trim();
     if (['everyone', 'admins_only'].includes(req.body.chatMode)) group.chatMode = req.body.chatMode;
     if (req.body.inviteEnabled !== undefined) group.inviteEnabled = req.body.inviteEnabled !== false;
@@ -588,8 +609,10 @@ const updateGroupAvatar = async (req, res) => {
     await group.save();
     await createSystemMessage(req, group, `${req.user.name} (${req.user.studentId}) updated the group image.`, 'group_updated');
     await recordActivity(req, group._id, 'group_image_updated', `${req.user.name} updated the group image.`);
-    if (previousPublicId) {
-      deleteImage(previousPublicId, { resourceType: previousResourceType }).catch(() => null);
+    if (previousPublicId && previousPublicId !== uploaded.publicId) {
+      deleteImage(previousPublicId, { resourceType: previousResourceType }).catch(error => {
+        console.warn('Previous group image cleanup failed:', error.message);
+      });
     }
     const summary = await groupSummary(group, req.user._id, req.user);
     await emitToUsers(req, group._id, 'chat_group_updated', { group: summary });

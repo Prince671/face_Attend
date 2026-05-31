@@ -33,6 +33,7 @@ export default function StudentLayout() {
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [routeLoading, setRouteLoading] = useState(false);
   const [appBusy, setAppBusy] = useState(false);
+  const [appBusyLabel, setAppBusyLabel] = useState('');
   const [accountOpen, setAccountOpen] = useState(false);
   const roomsUnreadKey = `studysphere_rooms_unread_${user?._id || 'guest'}`;
   const [roomsUnread, setRoomsUnread] = useState(() => localStorage.getItem(`studysphere_rooms_unread_${user?._id || 'guest'}`) === 'true');
@@ -101,7 +102,10 @@ export default function StudentLayout() {
   }, [location.pathname, setRoomsUnreadState]);
 
   useEffect(() => {
-    const handleBusy = (event) => setAppBusy(Boolean(event.detail?.active));
+    const handleBusy = (event) => {
+      setAppBusy(Boolean(event.detail?.active));
+      setAppBusyLabel(event.detail?.label || '');
+    };
     window.addEventListener('app:busy', handleBusy);
     return () => window.removeEventListener('app:busy', handleBusy);
   }, []);
@@ -143,7 +147,7 @@ export default function StudentLayout() {
           <motion.aside
             initial={{ x: -260 }} animate={{ x: 0 }} exit={{ x: -260 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="app-sidebar w-[min(14.5rem,82vw)] md:w-60 flex-shrink-0 flex flex-col bg-slate-900/95 md:bg-slate-900/80 border-r border-white/5 fixed h-full z-20">
+            className={`app-sidebar w-[min(14.5rem,82vw)] md:w-60 flex-shrink-0 flex flex-col bg-slate-900/95 md:bg-slate-900/80 border-r border-white/5 fixed h-full z-20 transition-all duration-200 ${appBusy ? 'pointer-events-none select-none blur-[2px] opacity-45' : ''}`}>
             <div className="p-3 sm:p-4 border-b border-white/5">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-xl bg-primary-600/20 border border-primary-500/30 flex items-center justify-center">
@@ -230,7 +234,7 @@ export default function StudentLayout() {
         )}
       </AnimatePresence>
 
-      <div className={`flex-1 min-w-0 min-h-0 flex flex-col transition-all duration-300 ${sidebarOpen ? 'md:ml-60' : 'ml-0'}`}>
+      <div className={`flex-1 min-w-0 min-h-0 flex flex-col transition-all duration-300 ${sidebarOpen ? 'md:ml-60' : 'ml-0'} ${appBusy ? 'pointer-events-none select-none blur-[1.5px]' : ''}`}>
         <header className="app-topbar h-14 sm:h-16 flex-shrink-0 bg-slate-900/60 border-b border-white/5 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-10 backdrop-blur-xl">
           <button onClick={() => setSidebarOpen(!sidebarOpen)} aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'} title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'} className="mobile-icon-btn rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center">
             {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -286,6 +290,15 @@ export default function StudentLayout() {
         <div className="route-loading-overlay" role="status" aria-live="polite" aria-label="Loading page">
           <div className="route-loading-card">
             <Loader2 className="h-7 w-7 animate-spin" />
+          </div>
+        </div>
+      )}
+      {appBusy && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/45 backdrop-blur-[2px]" role="status" aria-live="polite">
+          <div className="rounded-2xl border border-white/10 bg-slate-900/95 px-5 py-4 text-center shadow-2xl">
+            <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary-300" />
+            <p className="mt-3 text-sm font-semibold text-white">{appBusyLabel || 'Processing...'}</p>
+            <p className="mt-1 text-xs text-slate-400">Please wait until this finishes.</p>
           </div>
         </div>
       )}
