@@ -714,6 +714,9 @@ export default function StudentRooms() {
   const [unreadDivider, setUnreadDivider] = useState(null);
   const [swipePreview, setSwipePreview] = useState({ id: '', offset: 0 });
   const [nicknameDraft, setNicknameDraft] = useState('');
+  const [editingNicknameUserId, setEditingNicknameUserId] = useState('');
+  const [activeMemberMenuId, setActiveMemberMenuId] = useState('');
+  const [mobileMemberMenuId, setMobileMemberMenuId] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [lastFailedSend, setLastFailedSend] = useState(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState('');
@@ -728,6 +731,8 @@ export default function StudentRooms() {
   const groupsRef = useRef([]);
   const attachmentMediaTypeRef = useRef('');
   const longPressRef = useRef(null);
+  const memberLongPressRef = useRef(null);
+  const memberLongPressOpenedRef = useRef(false);
   const undoTimerRef = useRef(null);
   const attachmentInputRef = useRef(null);
   const groupAvatarInputRef = useRef(null);
@@ -766,6 +771,27 @@ export default function StudentRooms() {
     }));
     return () => window.dispatchEvent(new CustomEvent('app:busy', { detail: { active: false, label: '' } }));
   }, [roomActionBusy]);
+
+  useEffect(() => {
+    const closeMemberMenu = () => {
+      setActiveMemberMenuId('');
+      setMobileMemberMenuId('');
+      memberLongPressOpenedRef.current = false;
+    };
+    document.addEventListener('click', closeMemberMenu);
+    return () => document.removeEventListener('click', closeMemberMenu);
+  }, []);
+
+  useEffect(() => {
+    setActiveMemberMenuId('');
+    setMobileMemberMenuId('');
+    setEditingNicknameUserId('');
+    setNicknameDraft('');
+    memberLongPressOpenedRef.current = false;
+  }, [activeGroupId, showInfo]);
+
+  useEffect(() => () => window.clearTimeout(memberLongPressRef.current), []);
+
   const isGroupAdmin = myMembership?.role === 'admin';
   const activeInviteCode = invite?.inviteCode || activeGroup?.inviteCode || '';
   const activeInviteLink = inviteLinkForCode(activeInviteCode);
@@ -2148,21 +2174,54 @@ export default function StudentRooms() {
     }
   };
 
-  const saveNickname = () => {
-    const person = confirmAction?.user;
+  const openNicknameEditor = (person) => {
     if (!person?._id) return;
+    const personId = String(person._id);
+    setNicknameDraft(localNicknames[personId] || '');
+    setEditingNicknameUserId(personId);
+    setActiveMemberMenuId('');
+    setMobileMemberMenuId(personId);
+  };
+
+  const saveNickname = (personArg, options = {}) => {
+    const person = personArg || confirmAction?.user;
+    if (!person?._id) return;
+    const personId = String(person._id);
+    const nextValue = options.clear ? '' : nicknameDraft.trim();
     let nextNicknames = {};
     persistChatPrefs(current => {
       const nicknames = { ...(current.nicknames || {}) };
-      if (nicknameDraft.trim()) nicknames[String(person._id)] = nicknameDraft.trim();
-      else delete nicknames[String(person._id)];
+      if (nextValue) nicknames[personId] = nextValue;
+      else delete nicknames[personId];
       nextNicknames = nicknames;
       return { ...current, nicknames };
     });
     if (user?._id) preferenceAPI.set('chat.nicknames', nextNicknames).catch(() => {});
     setConfirmAction(null);
     setNicknameDraft('');
-    toast.success('Nickname saved');
+    setEditingNicknameUserId('');
+    setActiveMemberMenuId('');
+    setMobileMemberMenuId('');
+    toast.success(options.clear || !nextValue ? 'Nickname cleared' : 'Nickname saved');
+  };
+
+  const cancelNicknameEdit = () => {
+    setEditingNicknameUserId('');
+    setNicknameDraft('');
+  };
+
+  const handleMemberPressStart = (event, memberId) => {
+    if (event.pointerType === 'mouse') return;
+    window.clearTimeout(memberLongPressRef.current);
+    memberLongPressRef.current = window.setTimeout(() => {
+      memberLongPressOpenedRef.current = true;
+      setMobileMemberMenuId(memberId);
+      setActiveMemberMenuId(memberId);
+    }, 480);
+  };
+
+  const cancelMemberPress = () => {
+    window.clearTimeout(memberLongPressRef.current);
   };
 
   const openGallery = async () => {
@@ -3134,42 +3193,116 @@ export default function StudentRooms() {
                           </div>
                         </div>
                         <div className="max-h-[17.5rem] space-y-1 overflow-y-auto pr-1">
-                          {sortedMembers.map(member => {
+                          {sortedMembers.map((member, index) => {
                             const mUser = memberUser(member);
                             const isMe = String(mUser?._id) === String(user?._id);
+                            const memberId = String(mUser?._id || member._id || index);
+                            const isEditingNickname = editingNicknameUserId === memberId;
+                            const hasNickname = Boolean(localNicknames[memberId]);
+                            const menuOpen = activeMemberMenuId === memberId;
+                            const canModerateMember = isGroupAdmin && !isMe;
+                            const openMenuUp = sortedMembers.length - index <= 3;
                             return (
-                              <div key={mUser?._id} className="flex items-center gap-2 rounded-xl bg-white/[0.03] p-2 sm:gap-3">
+                              <div
+                                key={memberId}
+                                className={`group/member relative flex items-center gap-2 rounded-xl bg-white/[0.03] p-2 transition-colors hover:bg-white/[0.06] focus-within:bg-white/[0.06] sm:gap-3 ${menuOpen ? 'bg-white/[0.07]' : ''}`}
+                                onPointerDown={event => handleMemberPressStart(event, memberId)}
+                                onPointerMove={cancelMemberPress}
+                                onPointerUp={cancelMemberPress}
+                                onPointerLeave={cancelMemberPress}
+                                onClick={event => {
+                                  if (!memberLongPressOpenedRef.current) return;
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  memberLongPressOpenedRef.current = false;
+                                }}
+                              >
                                 <Avatar user={mUser} className="h-8 w-8 sm:h-9 sm:w-9" />
                                 <div className="min-w-0 flex-1">
-                                  <p className="truncate text-xs text-white sm:text-sm">{displayUserName(member)} {isMe && <span className="text-slate-500">(You)</span>}</p>
-                                  <p className="font-mono text-[10px] text-slate-500 sm:text-xs">{mUser?.studentId}</p>
+                                  {isEditingNickname ? (
+                                    <div className="flex min-w-0 items-center gap-1.5" onPointerDown={event => event.stopPropagation()}>
+                                      <input
+                                        value={nicknameDraft}
+                                        onChange={event => setNicknameDraft(event.target.value)}
+                                        onClick={event => event.stopPropagation()}
+                                        onKeyDown={event => {
+                                          if (event.key === 'Enter') saveNickname(mUser);
+                                          if (event.key === 'Escape') cancelNicknameEdit();
+                                        }}
+                                        placeholder={mUser?.name || 'Nickname'}
+                                        autoFocus
+                                        className="h-8 min-w-0 flex-1 rounded-lg border border-primary-400/40 bg-slate-950/70 px-2 text-xs text-white outline-none placeholder:text-slate-500 focus:border-primary-300"
+                                      />
+                                      <button type="button" onClick={event => { event.stopPropagation(); saveNickname(mUser); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25" aria-label="Save nickname" title="Save nickname">
+                                        <Check className="h-4 w-4" />
+                                      </button>
+                                      {hasNickname && (
+                                        <button type="button" onClick={event => { event.stopPropagation(); saveNickname(mUser, { clear: true }); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-white/5 text-slate-300 hover:bg-white/10" aria-label="Clear nickname" title="Clear nickname">
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      )}
+                                      <button type="button" onClick={event => { event.stopPropagation(); cancelNicknameEdit(); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-white/5 text-slate-300 hover:bg-white/10" aria-label="Cancel nickname edit" title="Cancel">
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <p className="truncate text-xs text-white sm:text-sm">{displayUserName(member)} {isMe && <span className="text-slate-500">(You)</span>}</p>
+                                      <p className="font-mono text-[10px] text-slate-500 sm:text-xs">{mUser?.studentId}</p>
+                                    </>
+                                  )}
                                 </div>
                                 {member.role === 'admin' && <span className="rounded-full bg-primary-500/15 px-2 py-1 text-[10px] font-semibold text-primary-200">Admin</span>}
-                                <button type="button" onClick={() => { setNicknameDraft(localNicknames[String(mUser?._id)] || ''); setConfirmAction({ type: 'nickname', user: mUser }); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-slate-300 hover:bg-white/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs" aria-label="Set nickname"><Edit3 className="h-4 w-4" /><span className="hidden sm:inline">Nickname</span></button>
-                                {isGroupAdmin && !isMe && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmAction({ type: 'member_admin', member, isAdmin: member.role !== 'admin' })}
-                                      className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-primary-200 hover:bg-primary-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
-                                      aria-label={member.role === 'admin' ? `Remove admin from ${mUser?.name || 'member'}` : `Make ${mUser?.name || 'member'} group admin`}
-                                      title={member.role === 'admin' ? 'Remove admin' : 'Make group admin'}
-                                    >
-                                      <ShieldCheck className="h-4 w-4" />
-                                      <span className="hidden sm:inline">{member.role === 'admin' ? 'Remove admin' : 'Make admin'}</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmAction({ type: 'remove_member', member })}
-                                      className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-red-200 hover:bg-red-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
-                                      aria-label={`Remove ${mUser?.name || 'member'}`}
-                                      title="Remove member"
-                                    >
-                                      <UserMinus className="h-4 w-4" />
-                                      <span className="hidden sm:inline">Remove</span>
-                                    </button>
-                                  </>
-                                )}
+                                <div className="relative flex-shrink-0" onClick={event => event.stopPropagation()}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveMemberMenuId(current => current === memberId ? '' : memberId)}
+                                    className={`grid h-8 w-8 place-items-center rounded-lg text-slate-300 transition-all hover:bg-white/10 hover:text-white focus:bg-white/10 focus:text-white focus:outline-none ${menuOpen || mobileMemberMenuId === memberId ? 'opacity-100' : 'opacity-0 group-hover/member:opacity-100 group-focus-within/member:opacity-100'}`}
+                                    aria-label={`Open actions for ${mUser?.name || 'member'}`}
+                                    aria-expanded={menuOpen}
+                                    title="Member actions"
+                                  >
+                                    <MoreVertical className="h-4 w-4" />
+                                  </button>
+                                  {menuOpen && (
+                                    <div className={`absolute right-0 z-40 w-48 overflow-hidden rounded-xl border border-white/10 bg-slate-950/95 p-1 shadow-2xl shadow-black/30 backdrop-blur ${openMenuUp ? 'bottom-full mb-2' : 'top-full mt-2'}`}>
+                                      <button
+                                        type="button"
+                                        onClick={() => openNicknameEditor(mUser)}
+                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-200 hover:bg-white/10"
+                                      >
+                                        <Edit3 className="h-4 w-4 text-primary-200" /> {hasNickname ? 'Edit nickname' : 'Set nickname'}
+                                      </button>
+                                      {hasNickname && (
+                                        <button
+                                          type="button"
+                                          onClick={() => saveNickname(mUser, { clear: true })}
+                                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-200 hover:bg-white/10"
+                                        >
+                                          <X className="h-4 w-4 text-slate-300" /> Clear nickname
+                                        </button>
+                                      )}
+                                      {canModerateMember && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => { setActiveMemberMenuId(''); setMobileMemberMenuId(''); setConfirmAction({ type: 'member_admin', member, isAdmin: member.role !== 'admin' }); }}
+                                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-primary-100 hover:bg-primary-500/10"
+                                          >
+                                            <ShieldCheck className="h-4 w-4" /> {member.role === 'admin' ? 'Remove admin' : 'Make admin'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { setActiveMemberMenuId(''); setMobileMemberMenuId(''); setConfirmAction({ type: 'remove_member', member }); }}
+                                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-red-200 hover:bg-red-500/10"
+                                          >
+                                            <UserMinus className="h-4 w-4" /> Remove member
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -3936,32 +4069,6 @@ export default function StudentRooms() {
             )}
             <button type="button" onClick={() => { setConfirmAction(null); setLockDraft(''); }} className="btn-secondary">Cancel</button>
             <button type="button" onClick={saveLockedChat} className="btn-primary"><Lock className="h-4 w-4" /> Save lock</button>
-          </div>
-        </div>
-      </FeaturePanel>
-
-      <FeaturePanel open={confirmAction?.type === 'nickname'} title="Set Nickname" onClose={() => { setConfirmAction(null); setNicknameDraft(''); }}>
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-            <Avatar user={confirmAction?.user} className="h-12 w-12" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-white">{confirmAction?.user?.name || 'Student'}</p>
-              <p className="font-mono text-xs text-slate-500">{confirmAction?.user?.studentId}</p>
-            </div>
-          </div>
-          <label className="grid gap-1.5">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Nickname visible only to you</span>
-            <input
-              className="input-field"
-              value={nicknameDraft}
-              onChange={event => setNicknameDraft(event.target.value)}
-              placeholder={confirmAction?.user?.name || 'Nickname'}
-              autoFocus
-            />
-          </label>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <button type="button" onClick={() => setNicknameDraft('')} className="btn-secondary justify-center">Clear</button>
-            <button type="button" onClick={saveNickname} className="btn-primary justify-center">Save Nickname</button>
           </div>
         </div>
       </FeaturePanel>
