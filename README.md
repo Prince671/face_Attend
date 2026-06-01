@@ -239,7 +239,7 @@ WEBAUTHN_RP_ID=
 
 # Optional ML keep-alive ping from the Node backend
 ML_KEEPALIVE_ENABLED=true
-ML_KEEPALIVE_URL=https://face-attend-ml-backend.onrender.com/health
+ML_KEEPALIVE_URL=https://ml-service.com/health
 ML_KEEPALIVE_INTERVAL_MS=30000
 ML_KEEPALIVE_TIMEOUT_MS=45000
 
