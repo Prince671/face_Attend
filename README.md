@@ -1,170 +1,224 @@
-# StudySphere - Smart Attendance and LMS Platform
+<div align="center">
 
-StudySphere is a full-stack attendance management and learning management platform for colleges and departments. It combines face-based attendance, academic structure management, teacher/student dashboards, subject classrooms, LMS content, realtime notifications, room chat, quizzes, and reporting in one MERN application.
+# 🎓 StudySphere
+
+### Smart Attendance & Learning Management Platform
+
+*A unified platform combining face-based attendance, classroom management, LMS content, and real-time collaboration for modern colleges.*
+
+[![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![Express.js](https://img.shields.io/badge/Express.js-000000?style=for-the-badge&logo=express&logoColor=white)](https://expressjs.com/)
+[![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactjs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+
+[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+
+[![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Socket.io](https://img.shields.io/badge/Socket.io-010101?style=for-the-badge&logo=socketdotio&logoColor=white)](https://socket.io/)
+[![Redux](https://img.shields.io/badge/Redux_Toolkit-764ABC?style=for-the-badge&logo=redux&logoColor=white)](https://redux-toolkit.js.org/)
+
+[![JWT](https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
+[![Cloudinary](https://img.shields.io/badge/Cloudinary-3448C5?style=for-the-badge&logo=cloudinary&logoColor=white)](https://cloudinary.com/)
+[![Mongoose](https://img.shields.io/badge/Mongoose-880000?style=for-the-badge&logo=mongoose&logoColor=white)](https://mongoosejs.com/)
+[![Framer Motion](https://img.shields.io/badge/Framer_Motion-0055FF?style=for-the-badge&logo=framer&logoColor=white)](https://www.framer.com/motion/)
+
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+![Node Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square&logo=nodedotjs)
+![Python Version](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?style=flat-square&logo=python)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)
+
+</div>
+
+---
+
+## 📋 Table of Contents
+
+- [Overview](#-overview)
+- [Architecture](#-architecture)
+- [Features](#-features)
+- [Tech Stack](#-tech-stack)
+- [Project Structure](#-project-structure)
+- [Prerequisites](#-prerequisites)
+- [Environment Variables](#-environment-variables)
+- [Local Setup](#-local-setup)
+- [Docker Setup](#-docker-setup)
+- [LMS Workflow](#-lms-workflow)
+- [Quiz Import Format](#-quiz-import-format)
+- [Sample Data Files](#-sample-data-files)
+- [Testing Checklist](#-testing-checklist)
+- [Pre-Push Checklist](#-pre-push-checklist)
+- [Security Notes](#-security-notes)
+- [Production Notes](#-production-notes)
+
+---
+
+## 🌐 Overview
+
+StudySphere is a full-stack **attendance management** and **learning management platform** built for colleges and departments. It combines face-based attendance, academic structure management, teacher/student dashboards, subject classrooms, LMS content, real-time notifications, room chat, quizzes, and reporting — all in one MERN application.
 
 The LMS is attached directly to the existing academic hierarchy:
 
-```text
-Course -> Branch -> Semester -> Subject -> Teachers / Students
+```
+Course → Branch → Semester → Subject → Teachers / Students
 ```
 
-Every subject can work as a classroom with attendance, materials, assignments, quizzes, announcements, doubts, calendar events, and analytics.
+Every subject functions as a full classroom with attendance, materials, assignments, quizzes, announcements, doubts, calendar events, and analytics.
 
-## Push-Ready Notes
+---
 
-- Do not commit `.env` files, local media, generated exports, logs, caches, or build output.
-- Uploaded media should be stored in Cloudinary or another cloud provider, not in local `uploads`, `captures`, `chat-media`, or LMS media folders.
-- MongoDB remains the source of truth. Redis is optional and should only be used as a cache/temp-data layer.
-- The app should continue working if Redis is disabled with `CACHE_ENABLED=false`.
-- Before pushing, run the build/check commands in the **Pre-Push Checklist** section.
+## 🏗 Architecture
 
-## Current Capabilities
+```
+studysphere/
+  ├── frontend/         React + Vite SPA
+  ├── backend/          Express API + Socket.IO + MongoDB
+  ├── ml-service/       FastAPI face recognition + liveness
+  └── docker-compose.yml
+```
 
-### Attendance
+| Service | Port | Purpose |
+|---|---|---|
+| Frontend | `5173` | React + Vite UI |
+| Backend | `5000` | Express REST API + Socket.IO |
+| ML Service | `8000` | FastAPI face recognition |
+| MongoDB | `27017` | Primary database |
+| Redis | `6379` | Optional cache layer |
 
-- Face-based student registration and login support through the ML service.
-- Lecture creation, start/stop attendance, and lecture-wise attendance records.
-- Subject-wise attendance history, date-range filtering, Excel export, and imported attendance support.
-- Attendance disputes with admin/teacher resolution.
-- Low-attendance monitoring and notifications.
+---
 
-### LMS Classrooms
+## ✨ Features
 
-- Shared `Subject Classroom` page for admin, teacher, and student roles.
-- Classroom tabs: Overview, Attendance, Materials, Assignments, Quizzes, Calendar, Doubts, and Analytics.
-- Student view is scoped to enrolled subjects.
-- Teacher view is scoped to assigned subjects.
-- Department admin view is scoped to department subjects.
-- Students do not see classroom analytics; analytics are for staff/admin workflows.
+### 📸 Attendance
+- Face-based student registration and login via the ML service
+- Lecture creation, start/stop attendance, and lecture-wise records
+- Subject-wise attendance history, date-range filtering, Excel export, and imported attendance support
+- Attendance disputes with admin/teacher resolution
+- Low-attendance monitoring and notifications
 
-### Materials
+### 📚 LMS Classrooms
+- Shared `Subject Classroom` page for admin, teacher, and student roles
+- Tabs: **Overview · Attendance · Materials · Assignments · Quizzes · Calendar · Doubts · Analytics**
+- Student view scoped to enrolled subjects; teacher view scoped to assigned subjects
+- Department admin view scoped to department subjects
 
-- Teacher/admin can organize material in folders, create material as draft, publish it later, and delete it.
-- Supports uploaded files and links such as PDF, image, video, Excel, and notes.
-- Materials can be tagged by topic/unit such as `Unit 1`, `SDLC`, or `Agile`.
-- Published material is reflected to target students through realtime updates.
+### 📂 Materials
+- Organize material in folders, create as draft, publish later, and delete
+- Supports uploaded files and links — PDF, image, video, Excel, and notes
+- Tag materials by topic/unit (e.g. `Unit 1`, `SDLC`, `Agile`)
+- Real-time updates push published material to enrolled students
 
-### Assignments
+### 📝 Assignments
+- Draft → publish workflow with title, instructions, due date, marks, tags, and attachments
+- `offline` and `online` submission modes
+- Submissions locked after student submits; staff can grade, give feedback, and release results
+- Submission counts visible on assignment cards
 
-- Teacher/admin can create assignments as drafts and publish later.
-- Supports title, instructions, due date, marks, topic tags, attachments, and submission mode.
-- Submission mode can be `offline` or `online`.
-- Offline assignments do not show file upload controls on the student side.
-- Once a student marks/submits an assignment, it is locked from further editing.
-- Staff can view submissions, grade, provide feedback, and release results.
-- Assignment cards include submission counts and staff submission views.
+### 🧠 Quizzes
+- Manual creation or CSV/XLSX import
+- Draft → publish → attempt → close → release lifecycle
+- Timer support, shuffled questions, tab-switch warnings, one-question-at-a-time mode
+- Post-release review showing selected answers, correct answers, and explanations
+- Teacher marks view per student after release
 
-### Quizzes
+### 📅 LMS Calendar
+- Shows assignment dates/deadlines, quiz open/close dates, and announcements
+- Blinking dots for active assignments/quizzes until deadline or close time
 
-- Teacher/admin can create quizzes manually or import from CSV/XLSX.
-- Manual quiz creation supports editable question/options and variable option count.
-- Import format supports question, options, and correct option.
-- Quizzes can be drafted, published, attempted, closed, and released.
-- Quiz controls include timer support, shuffled question order, tab-switch warnings, and one-question-at-a-time mode.
-- Active quiz cards expand for better attempt UX.
-- After release, students can review selected answers, correct answers, and explanations where available.
-- After release or expiry, completed quizzes cannot be attempted again.
-- Teacher/admin can view marks for each student after release.
+### 💬 Doubts and Discussions
+- Students create doubts inside subject classrooms
+- Teacher/admin can reply, resolve, and delete discussions
+- Notifications sent to students when staff replies
 
-### LMS Calendar
+### 🔔 Real-time Notifications
+- Socket.IO for role-scoped real-time updates
+- RTK Query for shared API cache and targeted invalidation
+- Deadline summary notifications with readable names and real completion counts
 
-- Calendar shows assignment dates, assignment deadlines, quiz open/close dates, and announcements.
-- Dots indicate event types and active/deadline states.
-- Active assignment/quiz dots blink until the deadline or close time is reached.
-- Clicking a date shows the events scheduled for that date.
-- Lectures are intentionally excluded from the LMS calendar.
+### 📊 Dashboards
+| Role | Dashboard Contents |
+|---|---|
+| **Student** | Attendance progress, pending work, recent materials, grades, quiz/assignment state |
+| **Teacher** | Lectures, low attendance, pending submissions, quiz summaries, doubts |
+| **Dept. Admin** | LMS overview, classroom monitoring, teacher activity, completion stats |
+| **Super Admin** | Global system scope, academic and admin controls |
 
-### Doubts and Discussions
+---
 
-- Students can create doubts inside a subject classroom.
-- Teacher/admin can reply, resolve, and delete discussions.
-- Students receive notifications when a staff member replies.
-- Teacher dashboard can surface open/unread doubts.
-
-### Realtime Notifications
-
-- Socket.IO is used for role-scoped realtime updates.
-- Redux Toolkit and RTK Query are used on the frontend for shared API cache/state, request reuse, and targeted invalidation.
-- Students receive realtime updates for published materials, assignments, quizzes, announcements, grades, and discussion replies.
-- Teacher profiles do not receive a popup for every individual assignment/quiz submission.
-- Teachers receive one summary notification when an assignment deadline or quiz close time is reached.
-- Deadline summaries use readable assignment/quiz names and real completion counts.
-
-### Dashboards
-
-- Student dashboard includes attendance progress, enrolled subjects, pending LMS work, recent materials, grades, and quiz/assignment state.
-- Teacher dashboard includes lectures, assigned subjects, low attendance, pending submissions, quiz summaries, and doubts.
-- Department admin dashboard includes LMS overview, classroom monitoring, teacher activity, assignment/quiz completion, and announcement moderation.
-- Super admin manages global system scope and academic/admin controls.
-
-### UI and UX
-
-- Responsive dark-themed interface built with React, Tailwind CSS, Framer Motion, and Lucide icons.
-- Mobile views use smaller cards/text, horizontal scrolling where needed, and compact action icons.
-- Classroom metric cards are compact and horizontally scrollable on mobile.
-- Assignment and quiz cards use responsive grids with scroll behavior on smaller screens.
-- Loading states are shown near the data being fetched instead of relying on a global top progress line.
-- Browser zoom is disabled at the app shell level for consistent layout behavior.
-
-## Tech Stack
+## 🛠 Tech Stack
 
 ### Frontend
-
-- React 18
-- Vite
-- Tailwind CSS
-- React Router
-- Redux Toolkit and RTK Query
-- Axios
-- Socket.IO Client
-- Framer Motion
-- Lucide React
-- Recharts
-- React Hot Toast
+![React](https://img.shields.io/badge/-React_18-20232A?logo=react&logoColor=61DAFB)
+![Vite](https://img.shields.io/badge/-Vite-646CFF?logo=vite&logoColor=white)
+![TailwindCSS](https://img.shields.io/badge/-Tailwind-06B6D4?logo=tailwindcss&logoColor=white)
+![Redux](https://img.shields.io/badge/-RTK_Query-764ABC?logo=redux&logoColor=white)
+![Framer](https://img.shields.io/badge/-Framer_Motion-0055FF?logo=framer&logoColor=white)
+![Recharts](https://img.shields.io/badge/-Recharts-22B5BF)
+![Socket.IO](https://img.shields.io/badge/-Socket.IO_Client-010101?logo=socketdotio&logoColor=white)
 
 ### Backend
-
-- Node.js
-- Express
-- MongoDB with Mongoose
-- JWT authentication
-- Socket.IO
-- Redis cache support
-- Multer uploads
-- ExcelJS import/export
-- Nodemailer
-- Helmet, CORS, rate limiting, and validation middleware
+![Node.js](https://img.shields.io/badge/-Node.js-339933?logo=nodedotjs&logoColor=white)
+![Express](https://img.shields.io/badge/-Express-000000?logo=express&logoColor=white)
+![MongoDB](https://img.shields.io/badge/-MongoDB-47A248?logo=mongodb&logoColor=white)
+![Redis](https://img.shields.io/badge/-Redis-DC382D?logo=redis&logoColor=white)
+![JWT](https://img.shields.io/badge/-JWT-000000?logo=jsonwebtokens&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/-Socket.IO-010101?logo=socketdotio&logoColor=white)
+![ExcelJS](https://img.shields.io/badge/-ExcelJS-217346?logo=microsoftexcel&logoColor=white)
+![Cloudinary](https://img.shields.io/badge/-Cloudinary-3448C5?logo=cloudinary&logoColor=white)
 
 ### ML Service
+![Python](https://img.shields.io/badge/-Python-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/-FastAPI-009688?logo=fastapi&logoColor=white)
+![OpenCV](https://img.shields.io/badge/-OpenCV-5C3EE8?logo=opencv&logoColor=white)
+![ONNX](https://img.shields.io/badge/-ONNX_Runtime-005CED)
 
-- Python FastAPI
-- InsightFace and ONNX Runtime
-- OpenCV and NumPy
-- Liveness checks and face matching helpers
-- Optional AI analysis hooks
+---
 
-## Project Structure
+## 📁 Project Structure
 
 ```text
 studysphere/
-  backend/              Express API, Socket.IO, MongoDB models
-  frontend/             React + Vite application
-  ml-service/           FastAPI face recognition and liveness service
-  docker-compose.yml    Optional containerized local stack
-  README.md
+├── backend/                    # Express API, Socket.IO, MongoDB models
+│   ├── controllers/
+│   ├── models/
+│   ├── routes/
+│   ├── middleware/
+│   ├── utils/
+│   └── server.js
+├── frontend/                   # React + Vite application
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── store/              # Redux Toolkit + RTK Query
+│   │   └── main.jsx
+│   └── vite.config.js
+├── ml-service/                 # FastAPI face recognition + liveness
+│   ├── main.py
+│   └── requirements.txt
+├── docker-compose.yml          # Containerized local stack
+└── README.md
 ```
 
-## Prerequisites
+---
 
-- Node.js 18 or newer
-- npm
-- MongoDB local instance or MongoDB Atlas URI
-- Python 3.11, 3.12, or 3.13 for the ML service
-- Optional: Docker and Docker Compose
+## ✅ Prerequisites
 
-## Environment Variables
+| Requirement | Version |
+|---|---|
+| Node.js | 18 or newer |
+| npm | Latest |
+| MongoDB | Local instance or Atlas URI |
+| Python | 3.11, 3.12, or 3.13 |
+| Docker *(optional)* | Latest |
 
-Create environment files in each service as needed.
+---
+
+## 🔐 Environment Variables
+
+> ⚠️ Never commit `.env` files to version control.
 
 ### Backend `.env`
 
@@ -220,34 +274,19 @@ ADMIN_NAME=System Administrator
 DEPARTMENT_ADMIN_PASSWORD=Dept@123456
 ```
 
-### Redis Notes
+### 🔴 Redis Notes
 
-Redis is optional. Use it for caching dashboards, classroom summaries, notification counts, chat summaries, OTP/temp data, and future Socket.IO scaling. Do not use Redis as the primary database.
+Redis is **optional** and used as a speed layer only. MongoDB remains the source of truth. The app gracefully falls back to MongoDB when Redis is unavailable.
 
-For local development without Redis:
+| Scenario | Config |
+|---|---|
+| Local dev without Redis | `CACHE_ENABLED=false` |
+| Hosted Redis (e.g. Upstash) | `REDIS_URL=rediss://default:<password>@<host>:6379` |
+| Check cache status | `GET /api/ready` → reports `connected`, `fallback`, or `disabled` |
 
-```env
-CACHE_ENABLED=false
-```
+### 🔒 Biometric Deployment Notes
 
-For a hosted Redis provider such as Upstash, use the Redis database connection string in `REDIS_URL`. It usually starts with `redis://` or `rediss://`. Do not paste a `redis-cli ...` command into `REDIS_URL`.
-
-Example:
-
-```env
-REDIS_URL=rediss://default:<password>@<host>:6379
-CACHE_ENABLED=true
-```
-
-If your local network blocks the hosted Redis TCP connection, keep `CACHE_ENABLED=false` locally and enable Redis only in deployment.
-
-In production, Redis is treated as an optional speed layer. MongoDB remains the source of truth. If Redis is unavailable or slow, the backend falls back to MongoDB instead of failing the request. `REDIS_MAX_WAIT_MS` caps Redis waits at 30 seconds even if a larger timeout is accidentally configured; keep the connect/command values low for better user-facing performance. Check `/api/ready`; it reports `cache: "connected"`, `cache: "fallback"`, or `cache: "disabled"`.
-
-### Biometric Deployment Notes
-
-WebAuthn/passkey registration only works on `localhost` or HTTPS domains. On deployment, the relying party ID must match the frontend domain, not the Render/backend API domain.
-
-For Vercel + Render, set these backend environment variables on Render:
+WebAuthn/passkey registration requires `localhost` or HTTPS. For Vercel + Render deployments:
 
 ```env
 FRONTEND_URL=https://your-frontend.vercel.app
@@ -255,7 +294,7 @@ WEBAUTHN_ORIGIN=https://your-frontend.vercel.app
 WEBAUTHN_RP_ID=
 ```
 
-Leave `WEBAUTHN_RP_ID` empty unless you are intentionally sharing passkeys across subdomains. If you set it, it must be equal to the frontend hostname or a valid parent domain of it.
+Leave `WEBAUTHN_RP_ID` empty unless intentionally sharing passkeys across subdomains.
 
 ### Frontend `.env`
 
@@ -267,7 +306,7 @@ VITE_SOCKET_TRANSPORTS=polling
 VITE_SOCKET_DISABLE_UPGRADE=true
 ```
 
-If the frontend is served behind the same domain/proxy as the backend, both frontend values can be omitted because the app falls back to `/api` and `/`.
+> If the frontend is served behind the same domain/proxy as the backend, both values can be omitted — the app falls back to `/api` and `/`.
 
 ### ML Service `.env`
 
@@ -282,7 +321,9 @@ MIN_FACE_CONFIDENCE=0.55
 ANTHROPIC_API_KEY=
 ```
 
-## Local Setup
+---
+
+## 🚀 Local Setup
 
 ### 1. Backend
 
@@ -293,11 +334,7 @@ npm run seed
 npm run dev
 ```
 
-Backend runs on:
-
-```text
-http://localhost:5000
-```
+> Runs at **http://localhost:5000**
 
 ### 2. Frontend
 
@@ -307,184 +344,214 @@ npm install
 npm run dev
 ```
 
-Frontend runs on:
-
-```text
-http://localhost:5173
-```
+> Runs at **http://localhost:5173**
 
 ### 3. ML Service
 
 ```bash
 cd ml-service
 python -m venv .venv
+
+# Windows
 .venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
 python main.py
 ```
 
-Or run with Uvicorn:
+Or with Uvicorn:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-ML service runs on:
+> Runs at **http://localhost:8000**
 
-```text
-http://localhost:8000
-```
+---
 
-## Docker Setup
-
-The repository includes a `docker-compose.yml` for MongoDB, backend, frontend, and ML service.
+## 🐳 Docker Setup
 
 ```bash
 docker compose up --build
 ```
 
-Default exposed services:
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Backend | http://localhost:5000 |
+| ML Service | http://localhost:8000 |
+| MongoDB | localhost:27017 |
 
-```text
-Frontend:   http://localhost:5173
-Backend:    http://localhost:5000
-ML Service: http://localhost:8000
-MongoDB:    localhost:27017
-```
-
-To start only Redis from Docker Compose:
+To start only Redis:
 
 ```bash
 docker compose up -d redis
 ```
 
-Docker Desktop must be running before this command is used.
+> Docker Desktop must be running before this command.
 
-## Useful Commands
+---
+
+## 📖 LMS Workflow
+
+```
+1. Admin creates Course → Branch → Semester → Subject → assigns Teacher
+2. Teacher opens the subject classroom from the Subjects page
+3. Teacher creates Material / Assignment / Quiz / Announcement as draft
+4. Teacher publishes when ready
+5. Enrolled students receive real-time updates without refreshing
+6. Students view material, submit assignments, attempt quizzes, and ask doubts
+7. Teacher grades submissions or releases quiz results
+8. Student dashboards and classroom views reflect the latest LMS state
+```
+
+---
+
+## 📊 Quiz Import Format
+
+CSV/XLSX quiz import columns:
+
+| Column | Description |
+|---|---|
+| `Question` | The question text |
+| `Option 1` | First answer choice |
+| `Option 2` | Second answer choice |
+| `Option 3` | Third answer choice |
+| `Option 4` | Fourth answer choice |
+| `Correct Option` | Must match one of the provided options exactly |
+
+Manual quiz creation is also available and supports variable option counts per question.
+
+---
+
+## 📁 Sample Data Files
+
+| File | Purpose |
+|---|---|
+| `Project_Management_SDLC_Quiz_15Q.xlsx` | Sample quiz import |
+| `Project_Management_Attendance_Import.xlsx` | Sample attendance import |
+| `Students_Sem6_BTech_ComputerScience_Import.xlsx` | Sample student bulk import |
+| `VIT_CSE_Timetable.xlsx` | Sample timetable |
+
+---
+
+## 🧪 Testing Checklist
+
+Use this checklist after major changes:
+
+- [ ] Frontend build passes with `npm run build`
+- [ ] Backend starts without syntax/runtime errors
+- [ ] Backend and frontend audits pass with no moderate-or-higher vulnerabilities
+- [ ] Student can access only enrolled subject classrooms
+- [ ] Teacher can manage only assigned subject classrooms
+- [ ] Department admin can manage only department-scoped subjects
+- [ ] Material draft, publish, delete, and real-time student update work
+- [ ] Assignment draft, publish, online/offline submission, lock after submit, grading, feedback, and release work
+- [ ] Quiz draft, manual creation, CSV/XLSX import, publish, attempt, close, auto-release, release review, and teacher marks view work
+- [ ] Calendar displays assignment, quiz, and announcement events with correct dot indicators
+- [ ] Discussion create, reply, resolve, delete, and reply notification work
+- [ ] Deadline summary notifications show readable item names and real `submitted/total` or `attempted/total` counts
+- [ ] Attendance history date-range fetch shows local loading and returns correct records
+- [ ] Mobile subject cards, dashboard cards, classroom tabs, and submission modals do not overlap
+
+---
+
+## ✅ Pre-Push Checklist
+
+Run these before every push:
+
+```bash
+# 1. Build frontend
+cd frontend && npm run build
+
+# 2. Check backend syntax
+cd backend && node --check server.js
+
+# 3. Audit both services
+cd backend && npm audit --audit-level=moderate
+cd frontend && npm audit --audit-level=moderate
+```
+
+Then confirm:
+
+- [ ] `.env` files are **not** staged
+- [ ] Local uploads/exports are **not** staged
+- [ ] `frontend/dist`, `backend/uploads`, `backend/exports`, caches, and logs are **not** staged
+- [ ] Backend starts with Redis enabled **and** also works with `CACHE_ENABLED=false`
+- [ ] Login works for student, teacher, department admin, and super admin accounts
+
+---
+
+## 🔒 Security Notes
+
+> Replace all default secrets and passwords before any production deployment.
+
+- Keep `.env` files out of version control (use `.gitignore`)
+- Use HTTPS in production for camera, biometric, and auth flows
+- Use a strong, randomly generated `JWT_SECRET`
+- Restrict CORS origins to trusted frontend domains only
+- Keep MongoDB credentials private and rotate immediately if exposed
+- Store all uploaded media in Cloudinary — never serve local upload folders
+
+---
+
+## 🚢 Production Notes
+
+| Step | Details |
+|---|---|
+| Frontend build | `npm run build` in `/frontend` |
+| Backend mode | `NODE_ENV=production` |
+| Media storage | Configure Cloudinary — local upload folders are not served |
+| Redis | Configure only via secure environment variables |
+| Reverse proxy | Route `/api` and Socket.IO upgrades through your proxy |
+| ML service | Keep close to backend for lower latency |
+| ML keep-alive | Set `ML_KEEPALIVE_ENABLED=true` to avoid cold starts on free tiers |
+| Health monitoring | Add `/health` monitor for the ML service |
+| Scheduled jobs | Monitor assignment/quiz deadline notification jobs |
+
+---
+
+## 📦 Useful Commands
 
 ### Backend
 
 ```bash
 cd backend
-npm run dev
-npm start
-npm run seed
-npm run sync:subjects
+npm run dev            # Start with hot reload
+npm start              # Start production
+npm run seed           # Seed initial data
+npm run sync:subjects  # Sync subject enrollments
 npm audit --audit-level=moderate
+node --check server.js # Syntax check
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm run dev
-npm run build
-npm run preview
+npm run dev     # Start dev server
+npm run build   # Production build
+npm run preview # Preview production build locally
 npm audit --audit-level=moderate
 ```
 
-### Backend Syntax Check
+---
 
-```bash
-cd backend
-node --check server.js
-```
+## 📝 Push-Ready Notes
 
-## LMS Workflow
+- Do **not** commit `.env` files, local media, generated exports, logs, caches, or build output
+- Uploaded media must be stored in Cloudinary, not in local `uploads`, `captures`, `chat-media`, or LMS media folders
+- MongoDB is the source of truth — Redis is a cache/temp-data layer only
+- The app must continue working if Redis is disabled with `CACHE_ENABLED=false`
+- Run the build/check commands in the **Pre-Push Checklist** before every push
 
-1. Admin creates course, branch, semester, subject, and assigns a teacher.
-2. Teacher opens the subject classroom from the Subjects page.
-3. Teacher creates material, assignment, quiz, or announcement as draft.
-4. Teacher publishes when ready.
-5. Enrolled students receive realtime updates without refreshing.
-6. Students view material, submit assignments, attempt quizzes, and ask doubts.
-7. Teacher grades submissions or releases quiz results.
-8. Student dashboards and classroom views update with the latest LMS state.
+---
 
-## Quiz Import Format
+<div align="center">
 
-CSV/XLSX quiz import should include these columns:
+Made with ❤️ for modern education
 
-```text
-Question, Option 1, Option 2, Option 3, Option 4, Correct Option
-```
-
-The correct option should match one of the provided options. Manual quiz creation remains available and supports adding or removing options per question.
-
-## Sample Data Files
-
-The repository contains sample import files that can be used for testing:
-
-```text
-Project_Management_SDLC_Quiz_15Q.xlsx
-Project_Management_Attendance_Import.xlsx
-Students_Sem6_BTech_ComputerScience_Import.xlsx
-VIT_CSE_Timetable.xlsx
-```
-
-## Testing Checklist
-
-Use this checklist after major changes:
-
-- Frontend build passes with `npm run build`.
-- Backend starts without syntax/runtime errors.
-- Backend and frontend audits pass with no moderate-or-higher vulnerabilities.
-- Student can access only enrolled subject classrooms.
-- Teacher can manage only assigned subject classrooms.
-- Department admin can manage only department-scoped subjects.
-- Material draft, publish, delete, and realtime student update work.
-- Assignment draft, publish, online/offline submission, lock after submit, grading, feedback, and release work.
-- Quiz draft, manual creation, CSV/XLSX import, publish, attempt, close, auto-release, release review, and teacher marks view work.
-- Calendar displays assignment, quiz, and announcement events with correct dot indicators.
-- Discussion create, reply, resolve, delete, and reply notification work.
-- Deadline summary notifications show readable item names and real `submitted/total` or `attempted/total` counts.
-- Attendance history date-range fetch shows local loading and returns correct records.
-- Mobile subject cards, dashboard cards, classroom tabs, and submission modals do not overlap.
-
-## Pre-Push Checklist
-
-Run these before pushing code:
-
-```bash
-cd frontend
-npm run build
-```
-
-```bash
-cd backend
-node --check server.js
-npm audit --audit-level=moderate
-```
-
-```bash
-cd frontend
-npm audit --audit-level=moderate
-```
-
-Then confirm:
-
-- `.env` files are not staged.
-- Local uploads/exports are not staged.
-- `frontend/dist`, `backend/uploads`, `backend/exports`, caches, and logs are not staged.
-- The backend starts with Redis enabled and also works with `CACHE_ENABLED=false`.
-- Login works for student, teacher, department admin, and super admin accounts used in testing.
-
-## Security Notes
-
-- Replace default secrets and passwords before production use.
-- Keep `.env` files out of version control.
-- Use HTTPS in production for camera, biometric, and auth flows.
-- Use a strong `JWT_SECRET`.
-- Restrict CORS origins to trusted frontend domains.
-- Keep MongoDB credentials private and rotate them if exposed.
-
-## Production Notes
-
-- Build the frontend with `npm run build`.
-- Run the backend with `NODE_ENV=production`.
-- Configure Cloudinary for all uploaded media; the app does not serve local upload folders.
-- Configure Redis only through secure environment variables.
-- Configure reverse proxy routes for `/api` and Socket.IO.
-- Keep the ML service close to the backend for lower latency.
-- Add a `/health` monitor for the ML service and use an uptime monitor or paid always-on hosting to avoid cold starts. The backend can also ping `ML_KEEPALIVE_URL` every `30000ms` when `ML_KEEPALIVE_ENABLED=true`.
-- Monitor scheduled notification jobs for assignment/quiz deadlines and reminders.
+</div>
