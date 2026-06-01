@@ -719,6 +719,13 @@ const setMemberAdmin = async (req, res) => {
   try {
     if (!ensureStudent(req, res)) return;
     const { group } = await assertMember(req, req.params.groupId, { adminOnly: true });
+    if (String(req.params.studentId) === String(req.user._id) && req.body.isAdmin === false) {
+      return res.status(400).json({ success: false, message: 'You cannot remove your own admin access.' });
+    }
+    if (req.body.isAdmin === false) {
+      const activeAdmins = await ChatGroupMember.countDocuments({ group: group._id, isActive: true, role: 'admin' });
+      if (activeAdmins <= 1) return res.status(400).json({ success: false, message: 'At least one group admin is required.' });
+    }
     const member = await ChatGroupMember.findOneAndUpdate(
       { group: group._id, user: req.params.studentId, isActive: true },
       { role: req.body.isAdmin === false ? 'member' : 'admin' },

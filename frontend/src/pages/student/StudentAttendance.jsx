@@ -16,6 +16,7 @@ export default function StudentAttendance() {
   const [records, setRecords] = useState([]);
   const [stats, setStats] = useState(null);
   const [subject, setSubject] = useState(null);
+  const [attendanceCriteria, setAttendanceCriteria] = useState({ minimumPercentage: 75 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -33,6 +34,7 @@ export default function StudentAttendance() {
       const att = await attendanceAPI.getStudentSubject(subjectId);
       setRecords(att.data.records || []);
       setStats(att.data.stats);
+      setAttendanceCriteria(att.data.attendanceCriteria || { minimumPercentage: 75 });
     } finally {
       setRefreshing(false);
     }
@@ -45,6 +47,7 @@ export default function StudentAttendance() {
     ]).then(([att, sub]) => {
       setRecords(att.data.records || []);
       setStats(att.data.stats);
+      setAttendanceCriteria(att.data.attendanceCriteria || { minimumPercentage: 75 });
       setSubject(sub.data.subject);
     }).catch(console.error).finally(() => setLoading(false));
   }, [subjectId]);
@@ -125,6 +128,12 @@ export default function StudentAttendance() {
   if (loading) return <PageSkeleton variant="detail" rows={6} />;
 
   const pct = stats ? parseFloat(stats.percentage) : 0;
+  const minimumAttendance = Number(attendanceCriteria?.minimumPercentage || 75);
+  const neededClasses = stats?.total
+    ? minimumAttendance >= 100
+      ? Math.max(0, stats.total - stats.present)
+      : Math.max(0, Math.ceil(((minimumAttendance / 100) * stats.total - stats.present) / (1 - minimumAttendance / 100)))
+    : 0;
 
   return (
     <div className="relative max-w-4xl space-y-4 sm:space-y-6">
@@ -171,14 +180,14 @@ export default function StudentAttendance() {
           <div className="mt-4">
             <div className="flex justify-between text-sm mb-2">
               <span className="text-slate-400">Overall Attendance</span>
-              <span className={`font-bold ${pct >= 75 ? 'text-emerald-400' : 'text-red-400'}`}>{stats.percentage}%</span>
+              <span className={`font-bold ${pct >= minimumAttendance ? 'text-emerald-400' : 'text-red-400'}`}>{stats.percentage}%</span>
             </div>
             <div className="relative h-5 overflow-hidden rounded-full bg-white/10">
               <motion.div
                 initial={{ width: 0 }}
                 animate={{ width: `${Math.min(100, pct)}%` }}
                 transition={{ duration: 1 }}
-                className={`h-full rounded-full ${pct >= 75 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-red-500'}`}
+                className={`h-full rounded-full ${pct >= minimumAttendance ? 'bg-emerald-500' : pct >= Math.max(minimumAttendance - 15, 1) ? 'bg-amber-500' : 'bg-red-500'}`}
               />
               <span className="absolute inset-0 flex items-center justify-center text-[11px] font-medium text-white drop-shadow">
                 {stats.percentage}%
@@ -186,12 +195,12 @@ export default function StudentAttendance() {
             </div>
             <div className="flex justify-between text-xs text-slate-500 mt-1">
               <span>0%</span>
-              <span className={`font-medium ${pct >= 75 ? 'text-emerald-500' : 'text-red-500'}`}>
+              <span className={`font-medium ${pct >= minimumAttendance ? 'text-emerald-500' : 'text-red-500'}`}>
                 {stats.total === 0
                   ? 'No completed classes yet'
-                  : pct >= 75
+                  : pct >= minimumAttendance
                     ? 'Eligible for exam'
-                    : `Need ${Math.ceil((0.75 * stats.total - stats.present) / 0.25)} more classes for 75%`}
+                    : `Need ${neededClasses} more classes for ${minimumAttendance}%`}
               </span>
               <span>100%</span>
             </div>

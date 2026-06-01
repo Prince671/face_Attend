@@ -19,6 +19,7 @@ const eventTagMap = {
   attendance_closed: ['Attendance', 'Lectures', 'Dashboard', 'StudentDashboard', 'AdminDashboard', 'Notifications'],
   attendance_updated: ['Attendance', 'Dashboard', 'StudentDashboard', 'AdminDashboard'],
   attendance_marked: ['Attendance', 'Dashboard', 'StudentDashboard', 'AdminDashboard'],
+  attendance_criteria_updated: ['Attendance', 'Subjects', 'Dashboard', 'StudentDashboard', 'AdminDashboard', 'Notifications'],
   timetable_changed: ['Timetable', 'Lectures', 'Dashboard', 'StudentDashboard', 'AdminDashboard'],
   holiday_changed: ['Timetable', 'Lectures', 'Dashboard', 'StudentDashboard', 'AdminDashboard', 'Notifications'],
   lms_changed: ['Lms', 'Classroom', 'Dashboard', 'StudentDashboard', 'AdminDashboard'],

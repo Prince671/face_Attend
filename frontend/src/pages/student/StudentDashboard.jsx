@@ -158,7 +158,8 @@ export default function StudentDashboard() {
     recentAttendance = [],
     openLectures: dashboardOpenLectures = [],
     upcomingLectures: dashboardUpcomingLectures = [],
-    allLectures: dashboardAllLectures = []
+    allLectures: dashboardAllLectures = [],
+    attendanceCriteria = {}
   } = dashboard || {};
 
   const openLectures = sortLecturesByDateAsc(dashboardOpenLectures);
@@ -201,6 +202,7 @@ export default function StudentDashboard() {
   const totalAttended = subjectStats.reduce((a, s) => a + (s.attended || 0), 0);
   const totalLectures = subjectStats.reduce((a, s) => a + (s.totalLectures || 0), 0);
   const overallPct = totalLectures > 0 ? ((totalAttended / totalLectures) * 100).toFixed(1) : '0.0';
+  const minimumAttendance = Number(attendanceCriteria.minimumPercentage || 75);
   const academicLabel = getAcademicLabel(user);
   const lmsSubjects = lmsProgress?.subjects || [];
 
@@ -278,7 +280,7 @@ export default function StudentDashboard() {
           { icon: CheckCircle, label: 'Classes Attended', value: totalAttended, color: 'bg-emerald-500/20 text-emerald-400' },
           {
             icon: TrendingUp, label: 'Overall Attendance', value: `${overallPct}%`,
-            color: parseFloat(overallPct) >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+            color: parseFloat(overallPct) >= minimumAttendance ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
           },
         ].map((s, i) => (
           <motion.div
@@ -446,7 +448,7 @@ export default function StudentDashboard() {
             {subjectStats.map(s => (
               <Link key={s.subject._id} to={`/student/attendance/${s.subject._id}`} className={`subject-summary-card featured-lecture-card group ${subjectStats[activeSubjectIndex]?.subject?._id === s.subject._id ? 'is-active' : ''}`}>
                 <div className="flex items-start gap-2 sm:gap-3">
-                  <div className={`mt-2 h-2 w-2 flex-shrink-0 rounded-full ${Number(s.percentage) >= 75 ? 'bg-emerald-400' : Number(s.percentage) > 0 ? 'bg-amber-400' : 'bg-slate-500'}`} />
+                  <div className={`mt-2 h-2 w-2 flex-shrink-0 rounded-full ${Number(s.percentage) >= minimumAttendance ? 'bg-emerald-400' : Number(s.percentage) > 0 ? 'bg-amber-400' : 'bg-slate-500'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="line-clamp-2 text-[12px] font-semibold text-white sm:text-sm">{s.subject.name}</span>

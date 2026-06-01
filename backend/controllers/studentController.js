@@ -5,6 +5,7 @@ const Subject = require('../models/Subject');
 const { enrollStudentInMatchingSubjects, studentMatchesSubject } = require('../utils/subjectEnrollment');
 const { isProfileRestricted, isRestrictedForSubject, restrictedSubjectErrorMessage } = require('../utils/restrictionPolicy');
 const { studentIdentityFilter } = require('../utils/studentIdentity');
+const { getAttendanceCriteria } = require('../utils/attendanceCriteria');
 
 const visibleLectureFilter = {
   source: { $ne: 'imported' },
@@ -15,7 +16,7 @@ const visibleLectureFilter = {
 // @route   GET /api/student/dashboard
 const getDashboard = async (req, res) => {
   try {
-    const currentStudent = await User.findById(req.user._id).select('role department branch semester status isRestricted subjectRestrictions');
+    const currentStudent = await User.findById(req.user._id).select('role course department branch semester status isRestricted subjectRestrictions');
     if (!currentStudent) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
@@ -58,6 +59,12 @@ const getDashboard = async (req, res) => {
       .filter(Boolean)
       .filter(subject => !isRestrictedForSubject(student, subject._id));
     const subjectIds = student.enrolledSubjects.map(s => s._id);
+    const attendanceCriteria = await getAttendanceCriteria({
+      course: student.course,
+      department: student.department,
+      branch: student.branch,
+      semester: student.semester,
+    });
     const studentRecordFilter = studentIdentityFilter(student);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -164,7 +171,8 @@ const getDashboard = async (req, res) => {
       subjectStats,
       openLectures,
       upcomingLectures,
-      allLectures
+      allLectures,
+      attendanceCriteria
     });
   } catch (err) {
     console.error('getDashboard error:', err);

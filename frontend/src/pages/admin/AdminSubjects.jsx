@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Plus, BookOpen, Trash2, X, Folder, GraduationCap, ArrowLeft, Building2, ChevronRight, PauseCircle, PlayCircle, Settings, Upload, FileSpreadsheet, Search, MessageSquare, CheckCircle, XCircle, Calendar, Eye, RefreshCw, Filter } from 'lucide-react';
+import { Plus, BookOpen, Trash2, X, Folder, GraduationCap, ArrowLeft, Building2, ChevronRight, PauseCircle, PlayCircle, Settings, Upload, FileSpreadsheet, Search, MessageSquare, CheckCircle, XCircle, Calendar, Eye, RefreshCw, Filter, Percent } from 'lucide-react';
 import { adminAPI, subjectAPI, attendanceAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useRealtimeRefresh, useSocket } from '../../context/SocketContext';
@@ -97,6 +97,10 @@ export default function AdminSubjects() {
   const [disputeLoading, setDisputeLoading] = useState(false);
   const [resolvingDisputeId, setResolvingDisputeId] = useState('');
   const [resolutionNotes, setResolutionNotes] = useState({});
+  const [criteriaFormOpen, setCriteriaFormOpen] = useState(false);
+  const [criteriaSaving, setCriteriaSaving] = useState(false);
+  const [attendanceCriteria, setAttendanceCriteria] = useState(null);
+  const [criteriaValue, setCriteriaValue] = useState('75');
 
   const fetchSubjects = () => {
     setLoading(true);
@@ -119,6 +123,70 @@ export default function AdminSubjects() {
   }, []);
 
   useRealtimeRefresh(fetchSubjects, ['subjects', 'academic', 'teachers', 'attendance', 'pending-deletions']);
+
+  const criteriaScope = {
+    course: selectedCourse || selectedDepartment || '',
+    department: selectedDepartment,
+    branch: branchForApi(selectedBranchFilter),
+    semester: selectedSemester
+  };
+
+  const loadAttendanceCriteria = async () => {
+    if (!criteriaScope.department || !criteriaScope.semester || isTeacher) return;
+    try {
+      const res = await adminAPI.getAttendanceCriteria(criteriaScope);
+      const nextCriteria = res.data.criteria || null;
+      setAttendanceCriteria(nextCriteria);
+      setCriteriaValue(String(nextCriteria?.minimumPercentage || 75));
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not load attendance criteria');
+    }
+  };
+
+  useEffect(() => {
+    setCriteriaFormOpen(false);
+    setAttendanceCriteria(null);
+    setCriteriaValue('75');
+    loadAttendanceCriteria();
+  }, [criteriaScope.department, criteriaScope.branch, criteriaScope.semester, isTeacher]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const handleCriteriaUpdate = (payload = {}) => {
+      const criteria = payload.criteria || {};
+      if (
+        String(criteria.department || '') === String(criteriaScope.department || '') &&
+        String(criteria.branch || '') === String(criteriaScope.branch || '') &&
+        Number(criteria.semester || 0) === Number(criteriaScope.semester || 0)
+      ) {
+        setAttendanceCriteria(criteria);
+        setCriteriaValue(String(criteria.minimumPercentage || 75));
+      }
+    };
+    socket.on('attendance_criteria_updated', handleCriteriaUpdate);
+    return () => socket.off('attendance_criteria_updated', handleCriteriaUpdate);
+  }, [socket, criteriaScope.department, criteriaScope.branch, criteriaScope.semester]);
+
+  const saveAttendanceCriteria = async (event) => {
+    event.preventDefault();
+    if (!criteriaScope.department || !criteriaScope.semester) return toast.error('Open a semester first');
+    const minimumPercentage = Number(criteriaValue);
+    if (!Number.isFinite(minimumPercentage) || minimumPercentage < 1 || minimumPercentage > 100) {
+      return toast.error('Enter a percentage between 1 and 100');
+    }
+    setCriteriaSaving(true);
+    try {
+      const res = await adminAPI.updateAttendanceCriteria({ ...criteriaScope, minimumPercentage });
+      setAttendanceCriteria(res.data.criteria);
+      setCriteriaFormOpen(false);
+      toast.success('Minimum attendance criteria updated');
+      fetchSubjects();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not update criteria');
+    } finally {
+      setCriteriaSaving(false);
+    }
+  };
 
   useEffect(() => {
     setLmsActivity(readLmsActivity(user?._id));
@@ -1136,6 +1204,49 @@ export default function AdminSubjects() {
       ) : (
         <div className="relative">
         <LoadingOverlay show={loading && subjects.length > 0} label="Refreshing subjects..." />
+        {!isTeacher && selectedSemester && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card mb-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-primary-300">
+                  <Percent className="h-4 w-4" /> Minimum Attendance Criteria
+                </p>
+                <h2 className="mt-1 text-lg font-semibold text-white">
+                  {attendanceCriteria?.minimumPercentage || 75}% required for Semester {selectedSemester}
+                </h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  {selectedCourse ? `${selectedCourse} - ` : ''}{selectedBranch || selectedBranchFilter || selectedDepartment}. Students and teachers are notified instantly after changes.
+                </p>
+              </div>
+              <button type="button" onClick={() => setCriteriaFormOpen(open => !open)} className="btn-secondary justify-center">
+                {criteriaFormOpen ? <><X className="h-4 w-4" /> Close</> : <><Settings className="h-4 w-4" /> Update Criteria</>}
+              </button>
+            </div>
+            {criteriaFormOpen && (
+              <form onSubmit={saveAttendanceCriteria} className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                <input className="input-field" value={selectedCourse || selectedDepartment || 'Current course'} disabled readOnly aria-label="Course" />
+                <input className="input-field" value={`${selectedBranch || selectedBranchFilter || selectedDepartment} - Sem ${selectedSemester}`} disabled readOnly aria-label="Semester scope" />
+                <label className="relative">
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="0.1"
+                    className="input-field pr-10"
+                    value={criteriaValue}
+                    onChange={event => setCriteriaValue(event.target.value)}
+                    aria-label="Minimum attendance percentage"
+                    required
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">%</span>
+                </label>
+                <button type="submit" disabled={criteriaSaving} className="btn-primary justify-center">
+                  {criteriaSaving ? <><RefreshCw className="h-4 w-4 animate-spin" /> Saving</> : 'Save'}
+                </button>
+              </form>
+            )}
+          </motion.div>
+        )}
         <div className="three-card-grid">
           {visibleSubjects.map((sub, i) => (
             <motion.div key={sub._id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}

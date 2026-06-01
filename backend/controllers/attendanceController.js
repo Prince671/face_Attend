@@ -17,6 +17,7 @@ const { logAudit } = require('../utils/auditLogger');
 const { studentMatchesSubject } = require('../utils/subjectEnrollment');
 const { schedulePendingDeletion } = require('../utils/pendingDeletion');
 const { studentCodeOf, studentIdentityFilter } = require('../utils/studentIdentity');
+const { getAttendanceCriteria } = require('../utils/attendanceCriteria');
 
 const attendanceFailure = (res, message, extra = {}) => {
   return res.json({ success: false, message, ...extra });
@@ -920,11 +921,19 @@ const getStudentSubjectAttendance = async (req, res) => {
     const presentCount = Object.keys(attendanceMap).length;
     const totalCount = lectures.length;
     const percentage = totalCount > 0 ? ((presentCount / totalCount) * 100).toFixed(2) : '0.00';
+    const subject = lectures[0]?.subject || await Subject.findById(subjectId).select('course department branch semester').lean();
+    const attendanceCriteria = await getAttendanceCriteria({
+      course: subject?.course,
+      department: subject?.department,
+      branch: subject?.branch,
+      semester: subject?.semester,
+    });
 
     res.json({
       success: true,
       records: result,
-      stats: { present: presentCount, total: totalCount, percentage }
+      stats: { present: presentCount, total: totalCount, percentage },
+      attendanceCriteria
     });
   } catch (err) {
     console.error('getStudentSubjectAttendance error:', err);

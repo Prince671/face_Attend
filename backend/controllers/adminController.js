@@ -8,6 +8,7 @@ const Subject = require('../models/Subject');
 const Lecture = require('../models/Lecture');
 const Attendance = require('../models/Attendance');
 const AcademicStructure = require('../models/AcademicStructure');
+const AttendanceCriteria = require('../models/AttendanceCriteria');
 const { enrollStudentInMatchingSubjects, studentMatchForSubject, studentMatchesSubject } = require('../utils/subjectEnrollment');
 const { applyDepartmentScope, applyAcademicScope, assertDepartmentAccess, getAdminDepartment, getAdminSemesterScope, getTeacherSemesterScope, isSystemAdmin, adminDepartmentRoom } = require('../utils/adminScope');
 const { logAudit } = require('../utils/auditLogger');
@@ -15,6 +16,7 @@ const { schedulePendingDeletion } = require('../utils/pendingDeletion');
 const { loadWorkbook, rowToValues } = require('../utils/excelWorkbook');
 const { canReceiveSubjectUpdates } = require('../utils/restrictionPolicy');
 const { studentCodeOf } = require('../utils/studentIdentity');
+const { criteriaFilter, getAttendanceCriteria } = require('../utils/attendanceCriteria');
 
 const KNOWN_DEPARTMENTS = ['Computer Science', 'Information Technology', 'Electronics', 'Mechanical', 'Civil', 'Chemical', 'Electrical'];
 const COURSE_OPTIONS = ['B. Tech', 'Diploma', 'BBA', 'MBA'];
@@ -1331,6 +1333,112 @@ const getAcademicStructure = async (req, res) => {
   } catch (err) {
     console.error('getAcademicStructure error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const getAttendanceCriteriaSettings = async (req, res) => {
+  try {
+    const scopedDepartment = getAdminDepartment(req.user);
+    const department = scopedDepartment || String(req.query.department || '').trim();
+    const branch = normalizeBranchValue(req.query.branch);
+    const semester = Number(req.query.semester || getAdminSemesterScope(req.user) || 0);
+    if (!department || !semester) {
+      return res.status(400).json({ success: false, message: 'Department and semester are required' });
+    }
+    if (scopedDepartment && department !== scopedDepartment) {
+      return res.status(403).json({ success: false, message: `Department admin can update only ${scopedDepartment}.` });
+    }
+    const criteria = await getAttendanceCriteria({
+      course: req.query.course,
+      department,
+      branch,
+      semester,
+    });
+    res.json({
+      success: true,
+      criteria,
+    });
+  } catch (err) {
+    console.error('getAttendanceCriteriaSettings error:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Server error' });
+  }
+};
+
+const updateAttendanceCriteriaSettings = async (req, res) => {
+  try {
+    const scopedDepartment = getAdminDepartment(req.user);
+    const department = scopedDepartment || String(req.body.department || '').trim();
+    const branch = normalizeBranchValue(req.body.branch);
+    const semester = Number(req.body.semester || getAdminSemesterScope(req.user) || 0);
+    const course = String(req.body.course || '').trim();
+    const minimumPercentage = Number(req.body.minimumPercentage);
+    if (!department || !semester) {
+      return res.status(400).json({ success: false, message: 'Department and semester are required' });
+    }
+    if (scopedDepartment && department !== scopedDepartment) {
+      return res.status(403).json({ success: false, message: `Department admin can update only ${scopedDepartment}.` });
+    }
+    if (!Number.isFinite(minimumPercentage) || minimumPercentage < 1 || minimumPercentage > 100) {
+      return res.status(400).json({ success: false, message: 'Minimum percentage must be between 1 and 100' });
+    }
+
+    const criteria = await AttendanceCriteria.findOneAndUpdate(
+      criteriaFilter({ department, branch, semester }),
+      {
+        course,
+        department,
+        branch,
+        semester,
+        minimumPercentage,
+        updatedBy: req.user._id,
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    const recipientQuery = {
+      pendingDeletion: { $ne: true },
+      status: 'active',
+      $or: [
+        { role: 'student', department, semester },
+        { role: 'teacher', departments: department },
+        { role: 'teacher', department },
+      ],
+    };
+    const recipients = await User.find(recipientQuery).select('_id role').lean();
+    const message = `The minimum % criteria is updated by the Department Admin to ${minimumPercentage}%.`;
+    const notifications = await Notification.insertMany(recipients.map(recipient => ({
+      recipient: recipient._id,
+      recipientRole: recipient.role,
+      type: 'general',
+      title: 'Attendance criteria updated',
+      message,
+      data: { department, branch, semester, course, minimumPercentage },
+      priority: 'high',
+    })), { ordered: false });
+
+    const payload = { action: 'attendance_criteria_updated', criteria };
+    const io = req.app.get('io');
+    if (io) {
+      io.to('admin_room').emit('attendance_criteria_updated', payload);
+      io.to(adminDepartmentRoom(department)).emit('attendance_criteria_updated', payload);
+      recipients.forEach((recipient, index) => {
+        io.to(`user_${recipient._id}`).emit('attendance_criteria_updated', payload);
+        if (notifications[index]) io.to(`user_${recipient._id}`).emit('notification_created', notifications[index]);
+      });
+    }
+
+    await logAudit(req, {
+      action: 'attendance.criteria_updated',
+      entityType: 'attendance_criteria',
+      entityId: criteria._id,
+      entityName: `${department} Semester ${semester}`,
+      targetDepartment: department,
+      details: { course, branch, semester, minimumPercentage },
+    });
+    res.json({ success: true, criteria, message: 'Attendance criteria updated' });
+  } catch (err) {
+    console.error('updateAttendanceCriteriaSettings error:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Server error' });
   }
 };
 
@@ -2784,7 +2892,7 @@ module.exports = {
   getPendingStudents, getAllStudents, getStudentById, approveStudent, rejectStudent,
   activateStudent, deactivateStudent, restrictStudent, unrestrictStudent, deleteStudent, bulkDeleteStudents,
   enrollStudentSubjects, getAnalytics, getSuperOverview,
-  getAcademicStructure, addAcademicCourse, addAcademicBranch, deleteAcademicCourse, deleteAcademicBranch,
+  getAcademicStructure, getAttendanceCriteriaSettings, updateAttendanceCriteriaSettings, addAcademicCourse, addAcademicBranch, deleteAcademicCourse, deleteAcademicBranch,
   getTeachers, createTeacher, importTeachers, importStudents, deleteTeacher, getTeacherDashboard, getTeacherStudents,
   restrictStudentForSubject, unrestrictStudentForSubject, notifyLowAttendanceStudents,
   getTeacherPeers, getTeacherPeerProfile, getTeacherAllocation, saveTeacherAllocation,

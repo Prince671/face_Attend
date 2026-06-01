@@ -1826,6 +1826,7 @@ export default function StudentRooms() {
       const res = await chatAPI.setMemberAdmin(activeGroup._id, memberUser(member)._id, isAdmin);
       setGroups(current => current.map(group => group._id === activeGroup._id ? res.data.group : group));
       setConfirmAction(null);
+      toast.success(isAdmin ? 'Member is now group admin' : 'Admin access removed');
     } catch (error) {
       toast.error(error.response?.data?.message || 'Could not update member');
     }
@@ -3146,16 +3147,28 @@ export default function StudentRooms() {
                                 {member.role === 'admin' && <span className="rounded-full bg-primary-500/15 px-2 py-1 text-[10px] font-semibold text-primary-200">Admin</span>}
                                 <button type="button" onClick={() => { setNicknameDraft(localNicknames[String(mUser?._id)] || ''); setConfirmAction({ type: 'nickname', user: mUser }); }} className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-slate-300 hover:bg-white/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs" aria-label="Set nickname"><Edit3 className="h-4 w-4" /><span className="hidden sm:inline">Nickname</span></button>
                                 {isGroupAdmin && !isMe && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmAction({ type: 'remove_member', member })}
-                                    className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-red-200 hover:bg-red-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
-                                    aria-label={`Remove ${mUser?.name || 'member'}`}
-                                    title="Remove member"
-                                  >
-                                    <UserMinus className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Remove</span>
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmAction({ type: 'member_admin', member, isAdmin: member.role !== 'admin' })}
+                                      className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-primary-200 hover:bg-primary-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
+                                      aria-label={member.role === 'admin' ? `Remove admin from ${mUser?.name || 'member'}` : `Make ${mUser?.name || 'member'} group admin`}
+                                      title={member.role === 'admin' ? 'Remove admin' : 'Make group admin'}
+                                    >
+                                      <ShieldCheck className="h-4 w-4" />
+                                      <span className="hidden sm:inline">{member.role === 'admin' ? 'Remove admin' : 'Make admin'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmAction({ type: 'remove_member', member })}
+                                      className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg text-red-200 hover:bg-red-500/10 sm:w-auto sm:px-2 sm:py-1 sm:text-xs"
+                                      aria-label={`Remove ${mUser?.name || 'member'}`}
+                                      title="Remove member"
+                                    >
+                                      <UserMinus className="h-4 w-4" />
+                                      <span className="hidden sm:inline">Remove</span>
+                                    </button>
+                                  </>
                                 )}
                               </div>
                             );

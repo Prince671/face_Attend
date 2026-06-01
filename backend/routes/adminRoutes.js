@@ -5,7 +5,7 @@ const {
   approveStudent, rejectStudent, activateStudent,
   deactivateStudent, restrictStudent, unrestrictStudent, deleteStudent,
   enrollStudentSubjects, getAnalytics, getSuperOverview,
-  getAcademicStructure, addAcademicCourse, addAcademicBranch, deleteAcademicCourse, deleteAcademicBranch,
+  getAcademicStructure, getAttendanceCriteriaSettings, updateAttendanceCriteriaSettings, addAcademicCourse, addAcademicBranch, deleteAcademicCourse, deleteAcademicBranch,
   getTeachers, createTeacher, importTeachers, importStudents, bulkDeleteStudents, deleteTeacher, getTeacherDashboard, getTeacherStudents,
   restrictStudentForSubject, unrestrictStudentForSubject, notifyLowAttendanceStudents,
   getTeacherPeers, getTeacherPeerProfile, getTeacherAllocation, saveTeacherAllocation,
@@ -34,6 +34,8 @@ router.post('/students/import', adminOnly, uploadSpreadsheet.single('file'), inv
 router.post('/students/bulk-delete', adminOnly, invalidateAfter(bulkDeleteStudents, ['dashboard', 'student-dashboard', 'admin-dashboard', 'analytics', 'subjects', 'chat-groups']));
 router.get('/super-overview', adminOnly, cacheMiddleware('admin-dashboard', 60), getSuperOverview);
 router.get('/academic-structure', adminOnly, cacheMiddleware('subjects', 180), getAcademicStructure);
+router.get('/attendance-criteria', adminOnly, cacheMiddleware('subjects', 60), getAttendanceCriteriaSettings);
+router.put('/attendance-criteria', adminOnly, invalidateAfter(updateAttendanceCriteriaSettings, ['subjects', 'dashboard', 'student-dashboard', 'admin-dashboard', 'analytics', 'attendance', 'notifications']));
 router.post('/academic-structure/courses', adminOnly, invalidateAfter(addAcademicCourse, ['subjects', 'dashboard', 'admin-dashboard']));
 router.post('/academic-structure/branches', adminOnly, invalidateAfter(addAcademicBranch, ['subjects', 'dashboard', 'admin-dashboard']));
 router.delete('/academic-structure/courses/:course', adminOnly, invalidateAfter(deleteAcademicCourse, ['subjects', 'dashboard', 'admin-dashboard']));
